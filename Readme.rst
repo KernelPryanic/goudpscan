@@ -22,7 +22,7 @@ Installation
 How to use
 ~~~~~~~~~~
 
-Run ``sudo goudpscan -f -t 1 -c 975 -p 19 -s 127.0.0-32.0/24 127.1.0.1``
+Run ``sudo goudpscan -f -t 1 -c 975 -p 19-22 -s 127.0.0-32.0/24 127.1.0.1``
 
 Also checkout list of `flags`_ and `arguments`_
 
