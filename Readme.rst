@@ -39,5 +39,5 @@ arguments
 ^^^^^^^^^
 * ``<hosts>`` - Hosts to scan.
 
-.. |language| image:: https://img.shields.io/badge/language-go-green.svg
+.. |language| image:: https://img.shields.io/badge/language-go-blue.svg
 .. |license| image:: https://img.shields.io/badge/license-Apache%202-blue.svg
