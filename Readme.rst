@@ -34,6 +34,8 @@ flags
 * ``-c, --maxConcurrency`` - Maximum concurrency. How many to scan concurrently every timeout.
 * ``-s, --sort`` - Sort results.
 * ``-p, --ports`` - Ports to scan.
+* ``-d, --decoys`` - List of decoys. Make sure in front of you is no any router or entity that overrides source ip.
+* ``-i, --iface`` - Interface to emit decoys from.
 
 arguments
 ^^^^^^^^^

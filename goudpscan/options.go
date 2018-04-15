@@ -5,6 +5,7 @@ type Options struct {
 	timeout        uint
 	recheck        uint8
 	maxConcurrency int
+	iface          string
 }
 
 func NewOptions(
@@ -12,7 +13,8 @@ func NewOptions(
 	timeout uint,
 	recheck uint8,
 	maxConcurrency int,
+	iface string,
 ) Options {
-	o := Options{fast, timeout, recheck, maxConcurrency}
+	o := Options{fast, timeout, recheck, maxConcurrency, iface}
 	return o
 }

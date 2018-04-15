@@ -2,9 +2,11 @@ package goudpscan
 
 import (
 	"fmt"
+	"github.com/google/gopacket/pcap"
 	"github.com/goudpscan/internal/iana"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
+	"math/rand"
 	"net"
 	"strconv"
 	"strings"
@@ -92,17 +94,19 @@ var payload = map[uint16]string{
 }
 
 type scanner struct {
-	hosts []string
-	ports []string
-	opts  *Options
+	hosts  []string
+	ports  []string
+	decoys []string
+	opts   *Options
 }
 
 func New(
 	hosts []string,
 	ports []string,
+	decoys []string,
 	opts *Options,
 ) scanner {
-	s := scanner{hosts, ports, opts}
+	s := scanner{hosts, ports, decoys, opts}
 	return s
 }
 
@@ -279,16 +283,19 @@ func inc(ip net.IP) {
 	}
 }
 
-func SendRequests(ip string,
+func SendRequests(
+	ip string,
 	ports *[]uint16,
+	decoys *[]string,
 	opts *Options,
 	wg *sync.WaitGroup,
 	throttle chan int,
 ) {
 	defer wg.Done()
 	pld := ""
-	var subwg sync.WaitGroup
+	var subwg, decoyswg sync.WaitGroup
 	subwg.Add(len(*ports))
+	decoyswg.Add(2)
 
 	throttleLocal := make(chan int, 1)
 
@@ -298,6 +305,11 @@ func SendRequests(ip string,
 			if val, ok := payload[port]; ok {
 				pld = val
 			}
+
+			rand.Seed(time.Now().UTC().UnixNano())
+			to := rand.Intn(len(*decoys))
+			go sendDecoys(ip, port, pld, decoys, opts, 0, to, &decoyswg)
+
 			conn, err := net.Dial("udp", fmt.Sprintf("%v:%v", ip, port))
 			if err != nil {
 				panic(fmt.Errorf(
@@ -305,7 +317,6 @@ func SendRequests(ip string,
 					err,
 				))
 			}
-			defer conn.Close()
 
 			conn.Write([]byte(pld))
 			if !opts.fast {
@@ -315,12 +326,16 @@ func SendRequests(ip string,
 			if !opts.fast {
 				writeCurrentPortAsync(ip, port)
 			}
+
+			go sendDecoys(ip, port, pld, decoys, opts, to, len(*decoys), &decoyswg)
 		}
 	}
+	decoyswg.Wait()
 	subwg.Wait()
 }
 
-func waitResponse(conn net.Conn,
+func waitResponse(
+	conn net.Conn,
 	ip string,
 	port uint16,
 	opts *Options,
@@ -357,8 +372,43 @@ func readResponse(conn net.Conn, opts *Options, ch chan bool) {
 	if err != nil {
 		ch <- false
 	}
-	conn = nil
 	ch <- true
+}
+
+func sendDecoys(
+	ip string,
+	port uint16,
+	payload string,
+	decoys *[]string,
+	opts *Options,
+	start, end int,
+	wg *sync.WaitGroup,
+) {
+	defer wg.Done()
+	for i := start; i < end; i++ {
+		handle, err := pcap.OpenLive(opts.iface, 1024, false, pcap.BlockForever)
+		if err != nil {
+			panic(fmt.Errorf(
+				"Error while creating handle for decoy: %s",
+				err,
+			))
+		}
+		frameOpts := UDPFrameOptions{net.ParseIP((*decoys)[i]), net.ParseIP(ip), port, false, []byte(payload)}
+		bytes, err := CreateSerializedUDPFrame(&frameOpts)
+		if err != nil {
+			panic(fmt.Errorf(
+				"Can't create decoy: %s",
+				err,
+			))
+		}
+		if err := handle.WritePacketData(bytes); err != nil {
+			panic(fmt.Errorf(
+				"Can't send decoy: %s",
+				err,
+			))
+		}
+		handle.Close()
+	}
 }
 
 func SniffICMP(ch chan bool, wg *sync.WaitGroup) {
@@ -459,7 +509,7 @@ func (s scanner) Scan(ch chan bool) map[string]string {
 			var wgLocal sync.WaitGroup
 			wgLocal.Add(len(ips))
 			for _, ip := range ips {
-				go SendRequests(ip, &ports, s.opts, &wgLocal, throttle)
+				go SendRequests(ip, &ports, &s.decoys, s.opts, &wgLocal, throttle)
 			}
 			wgLocal.Wait()
 		}(subnet, &wg)

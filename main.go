@@ -30,6 +30,14 @@ var (
 		"sort",
 		"Sort results.",
 	).Default("false").Short('s').Bool()
+	decoys = kingpin.Flag(
+		"decoys",
+		"List of decoys.",
+	).Short('d').Strings()
+	iface = kingpin.Flag(
+		"iface",
+		"Interface to work on.",
+	).Default("eth0").Short('i').String()
 	ports = kingpin.Flag(
 		"ports",
 		"Ports to scan.",
@@ -107,7 +115,9 @@ func MergeAsync(left []string, right []string, resultChannel chan []string) {
 
 func main() {
 	kingpin.Parse()
-	opts := goudpscan.NewOptions(*fast, *timeout, *recheck, *maxConcurrency)
+	opts := goudpscan.NewOptions(
+		*fast, *timeout, *recheck, *maxConcurrency, *iface,
+	)
 	ch := make(chan bool)
 
 	var wg sync.WaitGroup
@@ -115,7 +125,7 @@ func main() {
 		wg.Add(1)
 		go goudpscan.SniffICMP(ch, &wg)
 	}
-	sc := goudpscan.New(*hosts, *ports, &opts)
+	sc := goudpscan.New(*hosts, *ports, *decoys, &opts)
 
 	start := time.Now()
 	result := sc.Scan(ch)
