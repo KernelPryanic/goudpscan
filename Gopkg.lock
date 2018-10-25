@@ -3,27 +3,34 @@
 
 [[projects]]
   branch = "master"
+  digest = "1:315c5f2f60c76d89b871c73f9bd5fe689cad96597afd50fb9992228ef80bdd34"
   name = "github.com/alecthomas/template"
   packages = [
     ".",
-    "parse"
+    "parse",
   ]
+  pruneopts = "UT"
   revision = "a0175ee3bccc567396460bf5acd36800cb10c49c"
 
 [[projects]]
   branch = "master"
+  digest = "1:c198fdc381e898e8fb62b8eb62758195091c313ad18e52a3067366e1dda2fb3c"
   name = "github.com/alecthomas/units"
   packages = ["."]
+  pruneopts = "UT"
   revision = "2efee857e7cfd4f3d0138cc3cbb1b4966962b93a"
 
 [[projects]]
   branch = "master"
+  digest = "1:1be829409768146451305c0281e84fe9b82d65df47d3ce735445a272734f6b77"
   name = "github.com/mcuadros/go-version"
   packages = ["."]
+  pruneopts = "UT"
   revision = "88e56e02bea1c203c99222c365fa52a69996ccac"
 
 [[projects]]
   branch = "master"
+  digest = "1:424bd416908d173651271282c323e974bed22500d44bbdbfc2de5dc392727afe"
   name = "golang.org/x/net"
   packages = [
     "bpf",
@@ -31,19 +38,27 @@
     "internal/iana",
     "internal/socket",
     "ipv4",
-    "ipv6"
+    "ipv6",
   ]
+  pruneopts = "UT"
   revision = "b3c676e531a6dc479fa1b35ac961c13f5e2b4d2e"
 
 [[projects]]
+  digest = "1:c06d9e11d955af78ac3bbb26bd02e01d2f61f689e1a3bce2ef6fb683ef8a7f2d"
   name = "gopkg.in/alecthomas/kingpin.v2"
   packages = ["."]
+  pruneopts = "UT"
   revision = "947dcec5ba9c011838740e680966fd7087a71d0d"
   version = "v2.2.6"
 
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "fa67fb1a0a22849376fe577a73b4d1412d55f5ac5075937634bc0e92ed1551e3"
+  input-imports = [
+    "github.com/mcuadros/go-version",
+    "golang.org/x/net/icmp",
+    "golang.org/x/net/ipv4",
+    "gopkg.in/alecthomas/kingpin.v2",
+  ]
   solver-name = "gps-cdcl"
   solver-version = 1

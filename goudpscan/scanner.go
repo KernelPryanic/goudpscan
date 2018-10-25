@@ -2,7 +2,7 @@ package goudpscan
 
 import (
 	"fmt"
-	"github.com/goudpscan/internal/iana"
+	"github.com/FromZeus/goudpscan/internal/iana"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"net"

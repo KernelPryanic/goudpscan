@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/goudpscan/goudpscan"
+	"github.com/FromZeus/goudpscan/goudpscan"
 	"github.com/mcuadros/go-version"
 	"gopkg.in/alecthomas/kingpin.v2"
 	"sync"
