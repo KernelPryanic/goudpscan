@@ -1,22 +1,35 @@
 package main
 
 import (
+	"embed"
 	"fmt"
-	"github.com/FromZeus/goudpscan/goudpscan"
-	"github.com/mcuadros/go-version"
-	"gopkg.in/alecthomas/kingpin.v2"
+	"os"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/KernelPryanic/goudpscan/goudpscan"
+	"github.com/mcuadros/go-version"
+	"gopkg.in/alecthomas/kingpin.v2"
+	"gopkg.in/yaml.v3"
 )
 
 var (
+	print = kingpin.Flag(
+		"print",
+		"Print payloads.",
+	).Default("false").Bool()
+	payloads = kingpin.Flag(
+		"payloads",
+		"Paylaods yml config file.",
+	).Short('l').String()
 	fast = kingpin.Flag(
 		"fast",
 		"Fast scan mode. Only \"Open\" or \"Unknown\" statuses.",
 	).Default("false").Short('f').Bool()
 	timeout = kingpin.Flag(
 		"timeout",
-		"Timeout. How long to wait for response.",
+		"Timeout. How long to wait for response in seconds.",
 	).Default("1").Short('t').Uint()
 	recheck = kingpin.Flag(
 		"recheck",
@@ -33,12 +46,15 @@ var (
 	ports = kingpin.Flag(
 		"ports",
 		"Ports to scan.",
-	).Default("19").Short('p').Strings()
+	).Default("7-1024").Short('p').Strings()
 	hosts = kingpin.Arg(
 		"hosts",
 		"Hosts to scan.",
-	).Required().Strings()
+	).Default("127.0.0.1").Strings()
 )
+
+//go:embed payloads.yml
+var payloadsFS embed.FS
 
 func MergeSortAsync(arr []string, resultChan chan []string) {
 	l := len(arr)
@@ -105,17 +121,57 @@ func MergeAsync(left []string, right []string, resultChannel chan []string) {
 	resultChannel <- result
 }
 
+func FormPayload(payloadData map[string][]string) map[uint16][]string {
+	payload := map[uint16][]string{}
+
+	for k, v := range payloadData {
+		ports := goudpscan.BreakUPPort(k)
+		for _, p := range ports {
+			for _, data := range v {
+				payload[p] = append(payload[p], strings.ReplaceAll(data, " ", ""))
+			}
+		}
+	}
+
+	return payload
+}
+
 func main() {
 	kingpin.Parse()
 	opts := goudpscan.NewOptions(*fast, *timeout, *recheck, *maxConcurrency)
 	ch := make(chan bool)
+
+	var payloadFile []byte
+	var err error
+	if *payloads == "" {
+		payloadFile, err = payloadsFS.ReadFile("payloads.yml")
+	} else {
+		payloadFile, err = os.ReadFile(*payloads)
+	}
+	if err != nil {
+		panic(fmt.Errorf(
+			"Failed reading file with payloads: %s",
+			err,
+		))
+	}
+	if *print {
+		fmt.Printf(string(payloadFile))
+		os.Exit(0)
+	}
+	payloadData := make(map[string][]string)
+	if err = yaml.Unmarshal(payloadFile, &payloadData); err != nil {
+		panic(fmt.Errorf(
+			"Failed parsing file with payloads: %s",
+			err,
+		))
+	}
 
 	var wg sync.WaitGroup
 	if !*fast {
 		wg.Add(1)
 		go goudpscan.SniffICMP(ch, &wg)
 	}
-	sc := goudpscan.New(*hosts, *ports, &opts)
+	sc := goudpscan.New(*hosts, *ports, FormPayload(payloadData), &opts)
 
 	start := time.Now()
 	result := sc.Scan(ch)
