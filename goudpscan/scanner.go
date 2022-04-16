@@ -230,7 +230,6 @@ func SendRequests(
 	defer wg.Done()
 	plds := []string{""}
 	var wgPorts sync.WaitGroup
-	// wgPorts.Add(len(*ports))
 
 	throttleLocal := make(chan int, 1)
 
@@ -312,7 +311,6 @@ func readResponse(conn net.Conn, opts *Options, ch chan bool) {
 	if err != nil {
 		ch <- false
 	}
-	// conn = nil
 	ch <- true
 }
 
