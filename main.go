@@ -4,6 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,7 +30,7 @@ var (
 	).Default("false").Short('f').Bool()
 	timeout = kingpin.Flag(
 		"timeout",
-		"Timeout. How long to wait for response in seconds.",
+		"Timeout. Time to wait for response in seconds.",
 	).Default("1").Short('t').Uint()
 	recheck = kingpin.Flag(
 		"recheck",
@@ -37,7 +38,7 @@ var (
 	).Default("0").Short('r').Uint8()
 	maxConcurrency = kingpin.Flag(
 		"maxConcurrency",
-		"Maximum concurrency. How many to scan concurrently every timeout.",
+		"Maximum concurrency. Number of concurrent requests.",
 	).Default("768").Short('c').Int()
 	sort = kingpin.Flag(
 		"sort",
@@ -128,7 +129,8 @@ func FormPayload(payloadData map[string][]string) map[uint16][]string {
 		ports := goudpscan.BreakUPPort(k)
 		for _, p := range ports {
 			for _, data := range v {
-				payload[p] = append(payload[p], strings.ReplaceAll(data, " ", ""))
+				s, _ := strconv.Unquote(fmt.Sprintf(`"%s"`, strings.ReplaceAll(data, " ", "")))
+				payload[p] = append(payload[p], s)
 			}
 		}
 	}

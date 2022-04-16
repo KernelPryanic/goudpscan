@@ -230,13 +230,12 @@ func SendRequests(
 	defer wg.Done()
 	plds := []string{""}
 	var wgPorts sync.WaitGroup
-	wgPorts.Add(len(*ports))
+	// wgPorts.Add(len(*ports))
 
 	throttleLocal := make(chan int, 1)
 
 	for _, port := range *ports {
 		for i := uint8(0); i <= opts.recheck; i++ {
-			throttle <- 1
 			if val, ok := (*payloads)[port]; ok {
 				plds = val
 			} else {
@@ -244,6 +243,8 @@ func SendRequests(
 			}
 
 			for _, pld := range plds {
+				wgPorts.Add(1)
+				throttle <- 1
 				if !opts.fast {
 					throttleLocal <- 1
 				}
@@ -269,23 +270,7 @@ func sendRequest(
 			err,
 		))
 	}
-
-	addr := strings.Split(conn.LocalAddr().String(), ":")
-	srcIP := net.ParseIP(addr[0])
-	srcPort64, err := strconv.ParseUint(addr[1], 10, 16)
-	if err != nil {
-		panic(fmt.Errorf(
-			"Error in parsing source port: %s",
-			err,
-		))
-	}
-	srcPort := uint16(srcPort64)
-	dstIP := net.ParseIP(ip)
-
-	conn.Write(ComposeUDPPacket(srcIP, srcPort, dstIP, port, []byte(payload)))
-	// var b bytes.Buffer
-	// err = binary.Write(&b, binary.BigEndian, &payload)
-	// conn.Write(b.Bytes())
+	conn.Write([]byte(payload))
 
 	return conn
 }
@@ -326,7 +311,6 @@ func readResponse(conn net.Conn, opts *Options, ch chan bool) {
 	_, err := conn.Read(buffer)
 	if err != nil {
 		ch <- false
-		// fmt.Println(err)
 	}
 	// conn = nil
 	ch <- true
@@ -363,14 +347,14 @@ func SniffICMP(ch chan bool, wg *sync.WaitGroup) {
 				break
 			}
 			panic(fmt.Errorf(
-				"Something wrong with reading from icmp socket: %s",
+				"Something wrong with reading from ICMP socket: %s",
 				err,
 			))
 		}
 		rm, err := icmp.ParseMessage(iana.ProtocolICMP, rb[:n])
 		if err != nil {
 			panic(fmt.Errorf(
-				"Something wrong with parsing icmp response: %s",
+				"Something wrong with parsing ICMP response: %s",
 				err,
 			))
 		}
