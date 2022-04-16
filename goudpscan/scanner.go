@@ -2,6 +2,7 @@ package goudpscan
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -69,7 +70,7 @@ func Segmentation(subnet string) []string {
 	return segments
 }
 
-func BreakUPIP(segments []string) []string {
+func BreakUPIP(segments []string) ([]string, error) {
 	subnets := []string{}
 	tails := []string{}
 	head := ""
@@ -96,27 +97,23 @@ func BreakUPIP(segments []string) []string {
 
 		start, err := strconv.Atoi(_start)
 		if err != nil {
-			panic(fmt.Errorf(
-				"Error in breaking up ip ranges: %s",
-				err,
-			))
+			return nil, fmt.Errorf("parsing start int: %w", err)
 		}
 		end, err := strconv.Atoi(_end)
 		if err != nil {
-			panic(fmt.Errorf(
-				"Error in breaking up ip ranges: %s",
-				err,
-			))
+			return nil, fmt.Errorf("parsing end int: %w", err)
 		}
 
 		for i := start; i <= end; i++ {
-			tails = append(tails,
-				BreakUPIP(
-					append(
-						[]string{strconv.Itoa(i)}, segments[idx+1:]...,
-					),
-				)...,
+			r, err := BreakUPIP(
+				append(
+					[]string{strconv.Itoa(i)}, segments[idx+1:]...,
+				),
 			)
+			if err != nil {
+				return nil, fmt.Errorf("breaking UPIP: %w", err)
+			}
+			tails = append(tails, r...)
 		}
 		for _, el := range tails {
 			subnets = append(subnets, head+el)
@@ -127,26 +124,31 @@ func BreakUPIP(segments []string) []string {
 		subnets = append(subnets, head)
 	}
 
-	return subnets
+	return subnets, nil
 }
 
-func ParseSubnet(subnet string) []string {
+func ParseSubnet(subnet string) ([]string, error) {
 	segments := Segmentation(subnet)
-	subnets := []string{}
 
 	if strings.Contains(subnet, "/") {
-		subnets = BreakUPIP(segments[:len(segments)-1])
+		subnets, err := BreakUPIP(segments[:len(segments)-1])
+		if err != nil {
+			return nil, fmt.Errorf("breaking UPIP: %w", err)
+		}
 		for i := 0; i < len(subnets); i++ {
 			subnets[i] = subnets[i] + "/" + segments[len(segments)-1]
 		}
-	} else {
-		subnets = BreakUPIP(segments)
 	}
 
-	return subnets
+	subnets, err := BreakUPIP(segments)
+	if err != nil {
+		return nil, fmt.Errorf("breaking UPIP: %w", err)
+	}
+
+	return subnets, nil
 }
 
-func BreakUPPort(portRange string) []uint16 {
+func BreakUPPort(portRange string) ([]uint16, error) {
 	ports := []uint16{}
 
 	splitted := strings.Split(portRange, ",")
@@ -158,19 +160,13 @@ func BreakUPPort(portRange string) []uint16 {
 
 			start64, err := strconv.ParseUint(_start, 10, 16)
 			if err != nil {
-				panic(fmt.Errorf(
-					"Error in breaking up port ranges: %s",
-					err,
-				))
+				return nil, fmt.Errorf("parsing start uint: %w", err)
 			}
 			start := uint16(start64)
 
 			end64, err := strconv.ParseUint(_end, 10, 16)
 			if err != nil {
-				panic(fmt.Errorf(
-					"Error in breaking up port ranges: %s",
-					err,
-				))
+				return nil, fmt.Errorf("parsing end uint: %w", err)
 			}
 			end := uint16(end64)
 
@@ -180,17 +176,14 @@ func BreakUPPort(portRange string) []uint16 {
 		} else {
 			port64, err := strconv.ParseUint(s, 10, 16)
 			if err != nil {
-				panic(fmt.Errorf(
-					"Error in breaking up port ranges: %s",
-					err,
-				))
+				return nil, fmt.Errorf("breaking up port ranges: %w", err)
 			}
 			port := uint16(port64)
 			ports = append(ports, port)
 		}
 	}
 
-	return ports
+	return ports, nil
 }
 
 func Hosts(cidr string) ([]string, error) {
@@ -220,6 +213,7 @@ func inc(ip net.IP) {
 }
 
 func SendRequests(
+	errl *log.Logger,
 	ip string,
 	ports *[]uint16,
 	payloads *map[uint16][]string,
@@ -228,7 +222,7 @@ func SendRequests(
 	throttle chan int,
 ) {
 	defer wg.Done()
-	plds := []string{""}
+	var plds []string
 	var wgPorts sync.WaitGroup
 
 	throttleLocal := make(chan int, 1)
@@ -241,13 +235,21 @@ func SendRequests(
 				plds = []string{""}
 			}
 
-			for _, pld := range plds {
+			for pi, pld := range plds {
 				wgPorts.Add(1)
 				throttle <- 1
 				if !opts.fast {
 					throttleLocal <- 1
 				}
-				go waitResponse(sendRequest(ip, port, pld), ip, port, opts, &wgPorts, throttle, throttleLocal)
+				conn, err := sendRequest(ip, port, pld)
+				if err != nil {
+					errl.Printf(
+						"sending payload %d to %s:%d: %s",
+						pi, ip, port, err,
+					)
+					continue
+				}
+				go waitResponse(conn, ip, port, opts, &wgPorts, throttle, throttleLocal)
 				if !opts.fast {
 					writeCurrentPortAsync(ip, port)
 				}
@@ -261,17 +263,15 @@ func sendRequest(
 	ip string,
 	port uint16,
 	payload string,
-) net.Conn {
+) (net.Conn, error) {
 	conn, err := net.Dial("udp", fmt.Sprintf("%v:%v", ip, port))
 	if err != nil {
-		panic(fmt.Errorf(
-			"Error while connecting: %s",
-			err,
-		))
+		return nil, fmt.Errorf("connecting: %w", err)
 	}
-	conn.Write([]byte(payload))
-
-	return conn
+	if _, err := conn.Write([]byte(payload)); err != nil {
+		return nil, fmt.Errorf("writing: %w", err)
+	}
+	return conn, nil
 }
 
 func waitResponse(conn net.Conn,
@@ -283,11 +283,7 @@ func waitResponse(conn net.Conn,
 	throttleLocal chan int,
 ) {
 	defer wg.Done()
-	ch := make(chan bool, 1)
-	go readResponse(conn, opts, ch)
-
-	response := <-ch
-	if response {
+	if err := readResponse(conn, opts); err == nil {
 		writeScanDataAsync(fmt.Sprintf("%v:%v", ip, port), "Open")
 	} else {
 		status := readScanDataAsync(fmt.Sprintf("%v:%v", ip, port))
@@ -302,26 +298,25 @@ func waitResponse(conn net.Conn,
 	}
 }
 
-func readResponse(conn net.Conn, opts *Options, ch chan bool) {
-	defer close(ch)
+func readResponse(conn net.Conn, opts *Options) error {
 	defer conn.Close()
 	buffer := make([]byte, 1024)
-	conn.SetReadDeadline(time.Now().Add(time.Duration(opts.timeout) * time.Second))
-	_, err := conn.Read(buffer)
-	if err != nil {
-		ch <- false
+	if err := conn.SetReadDeadline(
+		time.Now().Add(time.Duration(opts.timeout) * time.Second),
+	); err != nil {
+		return err
 	}
-	ch <- true
+	if _, err := conn.Read(buffer); err != nil {
+		return err
+	}
+	return nil
 }
 
-func SniffICMP(ch chan bool, wg *sync.WaitGroup) {
+func SniffICMP(ch chan bool, wg *sync.WaitGroup) error {
 	defer wg.Done()
 	conn, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
 	if err != nil {
-		panic(fmt.Errorf(
-			"Can't open icmp socket to listen on: %s",
-			err,
-		))
+		return fmt.Errorf("opening icmp socket: %w", err)
 	}
 	defer conn.Close()
 
@@ -344,17 +339,11 @@ func SniffICMP(ch chan bool, wg *sync.WaitGroup) {
 				netOpError.Err.Error() == "use of closed network connection" {
 				break
 			}
-			panic(fmt.Errorf(
-				"Something wrong with reading from ICMP socket: %s",
-				err,
-			))
+			return fmt.Errorf("reading from ICMP socket: %w", err)
 		}
 		rm, err := icmp.ParseMessage(iana.ProtocolICMP, rb[:n])
 		if err != nil {
-			panic(fmt.Errorf(
-				"Something wrong with parsing ICMP response: %s",
-				err,
-			))
+			return fmt.Errorf("parsing ICMP response: %w", err)
 		}
 
 		port := readCurrentPortAsync(peer.String())
@@ -369,20 +358,29 @@ func SniffICMP(ch chan bool, wg *sync.WaitGroup) {
 			}
 		}
 	}
+	return nil
 }
 
-func (s scanner) Scan(ch chan bool) map[string]string {
+func (s scanner) Scan(errLog *log.Logger, ch chan bool) (map[string]string, error) {
 	throttle := make(chan int, s.opts.maxConcurrency)
 	subnets := []string{}
 
 	for _, host := range s.hosts {
-		subnets = append(subnets, ParseSubnet(host)...)
+		r, err := ParseSubnet(host)
+		if err != nil {
+			return nil, fmt.Errorf("parsing subnet: %w", err)
+		}
+		subnets = append(subnets, r...)
 	}
 
 	ports := []uint16{}
 
 	for _, port := range s.ports {
-		ports = append(ports, BreakUPPort(port)...)
+		r, err := BreakUPPort(port)
+		if err != nil {
+			return nil, fmt.Errorf("breaking up port: %w", err)
+		}
+		ports = append(ports, r...)
 	}
 
 	var wgSubnets sync.WaitGroup
@@ -392,16 +390,14 @@ func (s scanner) Scan(ch chan bool) map[string]string {
 			defer wgSubnets.Done()
 			ips, err := Hosts(subnet)
 			if err != nil {
-				panic(fmt.Errorf(
-					"Error in ip generating: %s",
-					err,
-				))
+				errLog.Printf("generating ip: %s", err)
+				return
 			}
 
 			var wgIPs sync.WaitGroup
 			wgIPs.Add(len(ips))
 			for _, ip := range ips {
-				go SendRequests(ip, &ports, &s.payloads, s.opts, &wgIPs, throttle)
+				go SendRequests(errLog, ip, &ports, &s.payloads, s.opts, &wgIPs, throttle)
 			}
 			wgIPs.Wait()
 		}(subnet, &wgSubnets)
@@ -411,5 +407,5 @@ func (s scanner) Scan(ch chan bool) map[string]string {
 		ch <- true
 	}
 
-	return scanData
+	return scanData, nil
 }

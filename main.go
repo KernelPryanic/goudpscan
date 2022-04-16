@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -122,11 +123,14 @@ func MergeAsync(left []string, right []string, resultChannel chan []string) {
 	resultChannel <- result
 }
 
-func FormPayload(payloadData map[string][]string) map[uint16][]string {
+func FormPayload(payloadData map[string][]string) (map[uint16][]string, error) {
 	payload := map[uint16][]string{}
 
 	for k, v := range payloadData {
-		ports := goudpscan.BreakUPPort(k)
+		ports, err := goudpscan.BreakUPPort(k)
+		if err != nil {
+			return nil, fmt.Errorf("breaking up port: %w", err)
+		}
 		for _, p := range ports {
 			for _, data := range v {
 				s, _ := strconv.Unquote(fmt.Sprintf(`"%s"`, strings.ReplaceAll(data, " ", "")))
@@ -135,13 +139,15 @@ func FormPayload(payloadData map[string][]string) map[uint16][]string {
 		}
 	}
 
-	return payload
+	return payload, nil
 }
 
 func main() {
 	kingpin.Parse()
 	opts := goudpscan.NewOptions(*fast, *timeout, *recheck, *maxConcurrency)
 	ch := make(chan bool)
+
+	errl := log.New(os.Stdout, "ERR", log.LstdFlags)
 
 	var payloadFile []byte
 	var err error
@@ -151,32 +157,37 @@ func main() {
 		payloadFile, err = os.ReadFile(*payloads)
 	}
 	if err != nil {
-		panic(fmt.Errorf(
-			"Failed reading file with payloads: %s",
-			err,
-		))
+		errl.Fatalf("reading file with payloads: %s", err)
 	}
 	if *print {
 		fmt.Printf(string(payloadFile))
-		os.Exit(0)
+		return
 	}
 	payloadData := make(map[string][]string)
 	if err = yaml.Unmarshal(payloadFile, &payloadData); err != nil {
-		panic(fmt.Errorf(
-			"Failed parsing file with payloads: %s",
-			err,
-		))
+		errl.Fatalf("parsing payloads file: %s", err)
 	}
 
 	var wg sync.WaitGroup
 	if !*fast {
 		wg.Add(1)
-		go goudpscan.SniffICMP(ch, &wg)
+		go func() {
+			if err := goudpscan.SniffICMP(ch, &wg); err != nil {
+				errl.Printf("sniffing ICMP: %s", err)
+			}
+		}()
 	}
-	sc := goudpscan.New(*hosts, *ports, FormPayload(payloadData), &opts)
+	pl, err := FormPayload(payloadData)
+	if err != nil {
+		errl.Fatalf("forming payload: %s", err)
+	}
+	sc := goudpscan.New(*hosts, *ports, pl, &opts)
 
 	start := time.Now()
-	result := sc.Scan(ch)
+	result, err := sc.Scan(errl, ch)
+	if err != nil {
+		errl.Fatalf("scanning: %s", err)
+	}
 	keys := make([]string, len(result))
 	i := 0
 	for k := range result {
