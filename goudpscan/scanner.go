@@ -244,20 +244,10 @@ func SendRequests(
 			}
 
 			for _, pld := range plds {
-				conn, err := net.Dial("udp", fmt.Sprintf("%v:%v", ip, port))
-				if err != nil {
-					panic(fmt.Errorf(
-						"Error while connecting: %s",
-						err,
-					))
-				}
-				defer conn.Close()
-
-				conn.Write([]byte(pld))
 				if !opts.fast {
 					throttleLocal <- 1
 				}
-				go waitResponse(conn, ip, port, opts, &wgPorts, throttle, throttleLocal)
+				go waitResponse(sendRequest(ip, port, pld), ip, port, opts, &wgPorts, throttle, throttleLocal)
 				if !opts.fast {
 					writeCurrentPortAsync(ip, port)
 				}
@@ -265,6 +255,39 @@ func SendRequests(
 		}
 	}
 	wgPorts.Wait()
+}
+
+func sendRequest(
+	ip string,
+	port uint16,
+	payload string,
+) net.Conn {
+	conn, err := net.Dial("udp", fmt.Sprintf("%v:%v", ip, port))
+	if err != nil {
+		panic(fmt.Errorf(
+			"Error while connecting: %s",
+			err,
+		))
+	}
+
+	addr := strings.Split(conn.LocalAddr().String(), ":")
+	srcIP := net.ParseIP(addr[0])
+	srcPort64, err := strconv.ParseUint(addr[1], 10, 16)
+	if err != nil {
+		panic(fmt.Errorf(
+			"Error in parsing source port: %s",
+			err,
+		))
+	}
+	srcPort := uint16(srcPort64)
+	dstIP := net.ParseIP(ip)
+
+	conn.Write(ComposeUDPPacket(srcIP, srcPort, dstIP, port, []byte(payload)))
+	// var b bytes.Buffer
+	// err = binary.Write(&b, binary.BigEndian, &payload)
+	// conn.Write(b.Bytes())
+
+	return conn
 }
 
 func waitResponse(conn net.Conn,
@@ -303,8 +326,9 @@ func readResponse(conn net.Conn, opts *Options, ch chan bool) {
 	_, err := conn.Read(buffer)
 	if err != nil {
 		ch <- false
+		// fmt.Println(err)
 	}
-	conn = nil
+	// conn = nil
 	ch <- true
 }
 
