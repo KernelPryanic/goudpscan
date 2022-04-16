@@ -215,8 +215,8 @@ func inc(ip net.IP) {
 func SendRequests(
 	errl *log.Logger,
 	ip string,
-	ports *[]uint16,
-	payloads *map[uint16][]string,
+	ports []uint16,
+	payloads map[uint16][]string,
 	opts *Options,
 	wg *sync.WaitGroup,
 	throttle chan int,
@@ -227,9 +227,9 @@ func SendRequests(
 
 	throttleLocal := make(chan int, 1)
 
-	for _, port := range *ports {
+	for _, port := range ports {
 		for i := uint8(0); i <= opts.recheck; i++ {
-			if val, ok := (*payloads)[port]; ok {
+			if val, ok := payloads[port]; ok {
 				plds = val
 			} else {
 				plds = []string{""}
@@ -397,7 +397,7 @@ func (s scanner) Scan(errLog *log.Logger, ch chan bool) (map[string]string, erro
 			var wgIPs sync.WaitGroup
 			wgIPs.Add(len(ips))
 			for _, ip := range ips {
-				go SendRequests(errLog, ip, &ports, &s.payloads, s.opts, &wgIPs, throttle)
+				go SendRequests(errLog, ip, ports, s.payloads, s.opts, &wgIPs, throttle)
 			}
 			wgIPs.Wait()
 		}(subnet, &wgSubnets)
