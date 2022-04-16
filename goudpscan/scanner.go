@@ -230,13 +230,11 @@ func SendRequests(
 	defer wg.Done()
 	plds := []string{""}
 	var wgPorts sync.WaitGroup
-	wgPorts.Add(len(*ports))
 
 	throttleLocal := make(chan int, 1)
 
 	for _, port := range *ports {
 		for i := uint8(0); i <= opts.recheck; i++ {
-			throttle <- 1
 			if val, ok := (*payloads)[port]; ok {
 				plds = val
 			} else {
@@ -244,20 +242,12 @@ func SendRequests(
 			}
 
 			for _, pld := range plds {
-				conn, err := net.Dial("udp", fmt.Sprintf("%v:%v", ip, port))
-				if err != nil {
-					panic(fmt.Errorf(
-						"Error while connecting: %s",
-						err,
-					))
-				}
-				defer conn.Close()
-
-				conn.Write([]byte(pld))
+				wgPorts.Add(1)
+				throttle <- 1
 				if !opts.fast {
 					throttleLocal <- 1
 				}
-				go waitResponse(conn, ip, port, opts, &wgPorts, throttle, throttleLocal)
+				go waitResponse(sendRequest(ip, port, pld), ip, port, opts, &wgPorts, throttle, throttleLocal)
 				if !opts.fast {
 					writeCurrentPortAsync(ip, port)
 				}
@@ -265,6 +255,23 @@ func SendRequests(
 		}
 	}
 	wgPorts.Wait()
+}
+
+func sendRequest(
+	ip string,
+	port uint16,
+	payload string,
+) net.Conn {
+	conn, err := net.Dial("udp", fmt.Sprintf("%v:%v", ip, port))
+	if err != nil {
+		panic(fmt.Errorf(
+			"Error while connecting: %s",
+			err,
+		))
+	}
+	conn.Write([]byte(payload))
+
+	return conn
 }
 
 func waitResponse(conn net.Conn,
@@ -304,7 +311,6 @@ func readResponse(conn net.Conn, opts *Options, ch chan bool) {
 	if err != nil {
 		ch <- false
 	}
-	conn = nil
 	ch <- true
 }
 
@@ -339,14 +345,14 @@ func SniffICMP(ch chan bool, wg *sync.WaitGroup) {
 				break
 			}
 			panic(fmt.Errorf(
-				"Something wrong with reading from icmp socket: %s",
+				"Something wrong with reading from ICMP socket: %s",
 				err,
 			))
 		}
 		rm, err := icmp.ParseMessage(iana.ProtocolICMP, rb[:n])
 		if err != nil {
 			panic(fmt.Errorf(
-				"Something wrong with parsing icmp response: %s",
+				"Something wrong with parsing ICMP response: %s",
 				err,
 			))
 		}
