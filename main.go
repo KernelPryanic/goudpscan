@@ -129,7 +129,7 @@ func FormPayload(payloadData map[string][]string) (map[uint16][]string, error) {
 	for k, v := range payloadData {
 		ports, err := goudpscan.BreakUPPort(k)
 		if err != nil {
-			return nil, fmt.Errorf("breaking up port: %w", err)
+			return nil, fmt.Errorf("break up port: %w", err)
 		}
 		for _, p := range ports {
 			for _, data := range v {
@@ -157,7 +157,7 @@ func main() {
 		payloadFile, err = os.ReadFile(*payloads)
 	}
 	if err != nil {
-		errl.Fatalf("reading file with payloads: %s", err)
+		errl.Fatalf("read file with payloads: %s", err)
 	}
 	if *print {
 		fmt.Printf(string(payloadFile))
@@ -165,7 +165,7 @@ func main() {
 	}
 	payloadData := make(map[string][]string)
 	if err = yaml.Unmarshal(payloadFile, &payloadData); err != nil {
-		errl.Fatalf("parsing payloads file: %s", err)
+		errl.Fatalf("parse payloads file: %s", err)
 	}
 
 	var wg sync.WaitGroup
@@ -173,20 +173,20 @@ func main() {
 		wg.Add(1)
 		go func() {
 			if err := goudpscan.SniffICMP(ch, &wg); err != nil {
-				errl.Printf("sniffing ICMP: %s", err)
+				errl.Printf("sniff ICMP: %s", err)
 			}
 		}()
 	}
 	pl, err := FormPayload(payloadData)
 	if err != nil {
-		errl.Fatalf("forming payload: %s", err)
+		errl.Fatalf("form payload: %s", err)
 	}
 	sc := goudpscan.New(*hosts, *ports, pl, &opts)
 
 	start := time.Now()
 	result, err := sc.Scan(errl, ch)
 	if err != nil {
-		errl.Fatalf("scanning: %s", err)
+		errl.Fatalf("scan: %s", err)
 	}
 	keys := make([]string, len(result))
 	i := 0
