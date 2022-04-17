@@ -70,7 +70,7 @@ func Segmentation(subnet string) []string {
 	return segments
 }
 
-func BreakUPIP(segments []string) ([]string, error) {
+func BreakUpIP(segments []string) ([]string, error) {
 	subnets := []string{}
 	tails := []string{}
 	head := ""
@@ -105,7 +105,7 @@ func BreakUPIP(segments []string) ([]string, error) {
 		}
 
 		for i := start; i <= end; i++ {
-			r, err := BreakUPIP(
+			r, err := BreakUpIP(
 				append(
 					[]string{strconv.Itoa(i)}, segments[idx+1:]...,
 				),
@@ -131,18 +131,19 @@ func ParseSubnet(subnet string) ([]string, error) {
 	segments := Segmentation(subnet)
 
 	if strings.Contains(subnet, "/") {
-		subnets, err := BreakUPIP(segments[:len(segments)-1])
+		subnets, err := BreakUpIP(segments[:len(segments)-1])
 		if err != nil {
-			return nil, fmt.Errorf("breaking UPIP: %w", err)
+			return nil, fmt.Errorf("breaking up IP: %w", err)
 		}
 		for i := 0; i < len(subnets); i++ {
 			subnets[i] = subnets[i] + "/" + segments[len(segments)-1]
 		}
+		return subnets, nil
 	}
 
-	subnets, err := BreakUPIP(segments)
+	subnets, err := BreakUpIP(segments)
 	if err != nil {
-		return nil, fmt.Errorf("breaking UPIP: %w", err)
+		return nil, fmt.Errorf("breaking up IP: %w", err)
 	}
 
 	return subnets, nil
