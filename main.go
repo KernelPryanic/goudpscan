@@ -181,7 +181,7 @@ func main() {
 	if err != nil {
 		errl.Fatalf("form payload: %s", err)
 	}
-	sc := goudpscan.New(*hosts, *ports, pl, &opts)
+	sc := goudpscan.New(*hosts, *ports, pl, opts)
 
 	start := time.Now()
 	result, err := sc.Scan(errl, ch)

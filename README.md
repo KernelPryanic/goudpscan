@@ -9,6 +9,12 @@ Fastest UDP port scanner you've ever seen.
 
 `go build -o bin/goudpscan`
 
+## Test
+
+`sudo go test -coverprofile=coverage.out ./...`
+
+`sudo` is required in order to create a raw socket for the ICMP listener.
+
 ## Install
 
 `./install.sh`

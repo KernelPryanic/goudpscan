@@ -12,7 +12,6 @@ func NewOptions(
 	timeout uint,
 	recheck uint8,
 	maxConcurrency int,
-) Options {
-	o := Options{fast, timeout, recheck, maxConcurrency}
-	return o
+) *Options {
+	return &Options{fast, timeout, recheck, maxConcurrency}
 }

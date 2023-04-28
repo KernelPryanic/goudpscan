@@ -26,9 +26,8 @@ func New(
 	ports []string,
 	payloads map[uint16][]string,
 	opts *Options,
-) scanner {
-	s := scanner{hosts, ports, payloads, opts}
-	return s
+) *scanner {
+	return &scanner{hosts, ports, payloads, opts}
 }
 
 var scanData = map[string]string{}
@@ -362,7 +361,7 @@ func SniffICMP(ch chan bool, wg *sync.WaitGroup) error {
 	return nil
 }
 
-func (s scanner) Scan(errLog *log.Logger, ch chan bool) (map[string]string, error) {
+func (s *scanner) Scan(errLog *log.Logger, ch chan bool) (map[string]string, error) {
 	throttle := make(chan int, s.opts.maxConcurrency)
 	subnets := []string{}
 
