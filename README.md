@@ -25,6 +25,8 @@ Run ``sudo goudpscan -f -t 1 -c 975 -p 7,19-22 -s 127.0.0-32.0/24 127.1.0.1``
 
 Also checkout the lists of [flags](#flags) and [arguments](#arguments).
 
+**Tip:** The Linux users can set the `CAP_NET_RAW` capability on the binary to execute the verbose scan without super privileges: `sudo setcap cap_net_raw+ep $(which goudpscan)`
+
 ### Flags
 
 * `    --help` - Show context-sensitive help (also try --help-long and --help-man).
