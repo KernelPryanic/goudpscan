@@ -32,30 +32,18 @@ func New(
 
 var scanData = map[string]string{}
 var currentPort = map[string]uint16{}
-var lock = sync.RWMutex{}
+var scanDataLock, currentPortLock = sync.RWMutex{}, sync.RWMutex{}
 
-func writeScanDataAsync(key string, value string) {
+func writeAsync[K comparable, V any](data map[K]V, key K, value V, lock *sync.RWMutex) {
 	lock.Lock()
 	defer lock.Unlock()
-	scanData[key] = value
+	data[key] = value
 }
 
-func readScanDataAsync(key string) string {
+func readAsync[K comparable, V any](data map[K]V, key K, lock *sync.RWMutex) V {
 	lock.RLock()
 	defer lock.RUnlock()
-	return scanData[key]
-}
-
-func writeCurrentPortAsync(key string, value uint16) {
-	lock.Lock()
-	defer lock.Unlock()
-	currentPort[key] = value
-}
-
-func readCurrentPortAsync(key string) uint16 {
-	lock.RLock()
-	defer lock.RUnlock()
-	return currentPort[key]
+	return data[key]
 }
 
 func Segmentation(subnet string) []string {
@@ -251,7 +239,7 @@ func SendRequests(
 				}
 				go waitResponse(conn, ip, port, opts, &wgPorts, throttle, throttleLocal)
 				if !opts.fast {
-					writeCurrentPortAsync(ip, port)
+					writeAsync(currentPort, ip, port, &currentPortLock)
 				}
 			}
 		}
@@ -284,11 +272,11 @@ func waitResponse(conn net.Conn,
 ) {
 	defer wg.Done()
 	if err := readResponse(conn, opts); err == nil {
-		writeScanDataAsync(fmt.Sprintf("%v:%v", ip, port), "Open")
+		writeAsync(scanData, fmt.Sprintf("%v:%v", ip, port), "Open", &scanDataLock)
 	} else {
-		status := readScanDataAsync(fmt.Sprintf("%v:%v", ip, port))
+		status := readAsync(scanData, fmt.Sprintf("%v:%v", ip, port), &scanDataLock)
 		if status == "" {
-			writeScanDataAsync(fmt.Sprintf("%v:%v", ip, port), "Unknown")
+			writeAsync(scanData, fmt.Sprintf("%v:%v", ip, port), "Unknown", &scanDataLock)
 		}
 	}
 
@@ -346,15 +334,15 @@ func SniffICMP(ch chan bool, wg *sync.WaitGroup) error {
 			return fmt.Errorf("parse ICMP response: %w", err)
 		}
 
-		port := readCurrentPortAsync(peer.String())
-		status := readScanDataAsync(fmt.Sprintf("%v:%v", peer.String(), port))
+		port := readAsync(currentPort, peer.String(), &currentPortLock)
+		status := readAsync(scanData, fmt.Sprintf("%v:%v", peer.String(), port), &scanDataLock)
 		if rm.Type == ipv4.ICMPTypeDestinationUnreachable && rm.Code == 3 {
 			if status != "Open" {
-				writeScanDataAsync(fmt.Sprintf("%v:%v", peer.String(), port), "Closed")
+				writeAsync(scanData, fmt.Sprintf("%v:%v", peer.String(), port), "Closed", &scanDataLock)
 			}
 		} else {
 			if status == "" || status == "Unknown" {
-				writeScanDataAsync(fmt.Sprintf("%v:%v", peer.String(), port), "Filtered")
+				writeAsync(scanData, fmt.Sprintf("%v:%v", peer.String(), port), "Filtered", &scanDataLock)
 			}
 		}
 	}

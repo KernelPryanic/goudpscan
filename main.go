@@ -192,7 +192,6 @@ func main() {
 	i := 0
 	for k := range result {
 		keys[i] = k
-		i++
 	}
 	if *sort {
 		resultChan := make(chan []string, 1)
