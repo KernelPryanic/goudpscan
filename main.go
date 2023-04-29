@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"log"
@@ -145,7 +146,6 @@ func FormPayload(payloadData map[string][]string) (map[uint16][]string, error) {
 func main() {
 	kingpin.Parse()
 	opts := goudpscan.NewOptions(*fast, *timeout, *recheck, *maxConcurrency)
-	ch := make(chan bool)
 
 	errl := log.New(os.Stdout, "ERR", log.LstdFlags)
 
@@ -168,11 +168,12 @@ func main() {
 		errl.Fatalf("parse payloads file: %s", err)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	if !*fast {
 		wg.Add(1)
 		go func() {
-			if err := goudpscan.SniffICMP(ch, &wg); err != nil {
+			if err := goudpscan.SniffICMP(ctx, &wg); err != nil {
 				errl.Printf("sniff ICMP: %s", err)
 			}
 		}()
@@ -184,14 +185,20 @@ func main() {
 	sc := goudpscan.New(*hosts, *ports, pl, opts)
 
 	start := time.Now()
-	result, err := sc.Scan(errl, ch)
+	result, err := sc.Scan(errl)
 	if err != nil {
 		errl.Fatalf("scan: %s", err)
 	}
+
+	// Stop the sniffer
+	cancel()
+	wg.Wait()
+
 	keys := make([]string, len(result))
 	i := 0
 	for k := range result {
 		keys[i] = k
+		i++
 	}
 	if *sort {
 		resultChan := make(chan []string, 1)
@@ -207,5 +214,4 @@ func main() {
 		fmt.Println(fmt.Sprintf("%s%s%v", k, t, result[k]))
 	}
 	fmt.Println("Elapsed time: ", elapsed)
-	wg.Wait()
 }

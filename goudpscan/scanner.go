@@ -1,6 +1,7 @@
 package goudpscan
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -300,7 +301,7 @@ func readResponse(conn net.Conn, opts *Options) error {
 	return nil
 }
 
-func SniffICMP(ch chan bool, wg *sync.WaitGroup) error {
+func SniffICMP(ctx context.Context, wg *sync.WaitGroup) error {
 	defer wg.Done()
 	conn, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
 	if err != nil {
@@ -309,7 +310,7 @@ func SniffICMP(ch chan bool, wg *sync.WaitGroup) error {
 	defer conn.Close()
 
 	go func() {
-		<-ch
+		<-ctx.Done()
 		if err := conn.Close(); err != nil {
 			panic(fmt.Errorf(
 				"close ICMP socket: %s",
@@ -349,7 +350,7 @@ func SniffICMP(ch chan bool, wg *sync.WaitGroup) error {
 	return nil
 }
 
-func (s *scanner) Scan(errLog *log.Logger, ch chan bool) (map[string]string, error) {
+func (s *scanner) Scan(errLog *log.Logger) (map[string]string, error) {
 	throttle := make(chan int, s.opts.maxConcurrency)
 	subnets := []string{}
 
@@ -391,9 +392,6 @@ func (s *scanner) Scan(errLog *log.Logger, ch chan bool) (map[string]string, err
 		}(subnet, &wgSubnets)
 	}
 	wgSubnets.Wait()
-	if !s.opts.fast {
-		ch <- true
-	}
 
 	return scanData, nil
 }
