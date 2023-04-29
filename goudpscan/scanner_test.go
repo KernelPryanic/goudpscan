@@ -3,14 +3,13 @@ package goudpscan_test
 import (
 	"context"
 	"errors"
-	"log"
 	"net"
-	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/KernelPryanic/goudpscan/goudpscan"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -185,7 +184,6 @@ func TestScan(t *testing.T) {
 	opts := goudpscan.NewOptions(true, 1, 0, 1)
 
 	sc := goudpscan.New(hosts, ports, payloads, opts)
-	errLog := log.New(os.Stderr, "", 0)
 
 	// Create a context to stop the SniffICMP function
 	ctx, cancel := context.WithCancel(context.Background())
@@ -202,7 +200,7 @@ func TestScan(t *testing.T) {
 	time.Sleep(1 * time.Second)
 
 	// Run the Scan function
-	scanResult, err := sc.Scan(errLog)
+	scanResult, err := sc.Scan(&log.Logger)
 	if err != nil {
 		t.Errorf("Scan failed: %v", err)
 	}

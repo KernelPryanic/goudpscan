@@ -3,7 +3,6 @@ package goudpscan
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/KernelPryanic/goudpscan/internal/iana"
+	"github.com/rs/zerolog"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 )
@@ -202,7 +202,7 @@ func inc(ip net.IP) {
 }
 
 func SendRequests(
-	errl *log.Logger,
+	log *zerolog.Logger,
 	ip string,
 	ports []uint16,
 	payloads map[uint16][]string,
@@ -232,10 +232,7 @@ func SendRequests(
 				}
 				conn, err := sendRequest(ip, port, pld)
 				if err != nil {
-					errl.Printf(
-						"send payload %d to %s:%d: %s",
-						pi, ip, port, err,
-					)
+					log.Error().Err(err).Int("payload-index", pi).Str("ip", ip).Uint16("port", port).Msg("send payload")
 					continue
 				}
 				go waitResponse(conn, ip, port, opts, &wgPorts, throttle, throttleLocal)
@@ -350,7 +347,7 @@ func SniffICMP(ctx context.Context, wg *sync.WaitGroup) error {
 	return nil
 }
 
-func (s *scanner) Scan(errLog *log.Logger) (map[string]string, error) {
+func (s *scanner) Scan(log *zerolog.Logger) (map[string]string, error) {
 	throttle := make(chan int, s.opts.maxConcurrency)
 	subnets := []string{}
 
@@ -379,14 +376,14 @@ func (s *scanner) Scan(errLog *log.Logger) (map[string]string, error) {
 			defer wgSubnets.Done()
 			ips, err := Hosts(subnet)
 			if err != nil {
-				errLog.Printf("generate IP: %s", err)
+				log.Error().Err(err).Msg("generate IP")
 				return
 			}
 
 			var wgIPs sync.WaitGroup
 			wgIPs.Add(len(ips))
 			for _, ip := range ips {
-				go SendRequests(errLog, ip, ports, s.payloads, s.opts, &wgIPs, throttle)
+				go SendRequests(log, ip, ports, s.payloads, s.opts, &wgIPs, throttle)
 			}
 			wgIPs.Wait()
 		}(subnet, &wgSubnets)
