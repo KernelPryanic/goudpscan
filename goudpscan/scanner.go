@@ -3,6 +3,7 @@ package goudpscan
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"net"
 	"strconv"
 	"strings"
@@ -368,6 +369,7 @@ func (s *scanner) Scan(log *zerolog.Logger) (map[string]string, error) {
 		}
 		ports = append(ports, r...)
 	}
+	rand.Seed(time.Now().UnixNano())
 
 	var wgSubnets sync.WaitGroup
 	wgSubnets.Add(len(subnets))
@@ -383,6 +385,7 @@ func (s *scanner) Scan(log *zerolog.Logger) (map[string]string, error) {
 			var wgIPs sync.WaitGroup
 			wgIPs.Add(len(ips))
 			for _, ip := range ips {
+				rand.Shuffle(len(ports), func(i, j int) { ports[i], ports[j] = ports[j], ports[i] })
 				go SendRequests(log, ip, ports, s.payloads, s.opts, &wgIPs, throttle)
 			}
 			wgIPs.Wait()
