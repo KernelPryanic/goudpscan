@@ -1,15 +1,15 @@
 package goudpscan_test
 
 import (
+	"context"
 	"errors"
-	"log"
 	"net"
-	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/KernelPryanic/goudpscan/goudpscan"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -184,16 +184,15 @@ func TestScan(t *testing.T) {
 	opts := goudpscan.NewOptions(true, 1, 0, 1)
 
 	sc := goudpscan.New(hosts, ports, payloads, opts)
-	errLog := log.New(os.Stderr, "", 0)
 
-	// Create a channel to stop the SniffICMP function
-	ch := make(chan bool)
+	// Create a context to stop the SniffICMP function
+	ctx, cancel := context.WithCancel(context.Background())
 
 	// Run the SniffICMP function in a separate goroutine
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
-		if err := goudpscan.SniffICMP(ch, &wg); err != nil && !errors.Is(err, net.ErrClosed) {
+		if err := goudpscan.SniffICMP(ctx, &wg); err != nil && !errors.Is(err, net.ErrClosed) {
 			t.Errorf("SniffICMP failed: %v", err)
 		}
 	}()
@@ -201,7 +200,7 @@ func TestScan(t *testing.T) {
 	time.Sleep(1 * time.Second)
 
 	// Run the Scan function
-	scanResult, err := sc.Scan(errLog, ch)
+	scanResult, err := sc.Scan(&log.Logger)
 	if err != nil {
 		t.Errorf("Scan failed: %v", err)
 	}
@@ -213,7 +212,7 @@ func TestScan(t *testing.T) {
 	}
 
 	// Stop the SniffICMP function
-	ch <- true
+	cancel()
 	wg.Wait()
 }
 

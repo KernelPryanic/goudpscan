@@ -1,9 +1,9 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -12,51 +12,166 @@ import (
 
 	"github.com/KernelPryanic/goudpscan/goudpscan"
 	"github.com/mcuadros/go-version"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"gopkg.in/alecthomas/kingpin.v2"
 	"gopkg.in/yaml.v3"
 )
 
 var (
-	print = kingpin.Flag(
+	cli      = kingpin.New("goudpscan", "A pretty fast UDP scanner.")
+	logLevel = cli.Flag(
+		"log-level",
+		"Set the log level",
+	).Default("info").Envar("GOUDPSCAN_LOG_LEVEL").String()
+	logJson = cli.Flag(
+		"log-json",
+		"Output logs in JSON format.",
+	).Default("false").Envar("GOUDPSCAN_JSON_LOG").Bool()
+	print = cli.Flag(
 		"print",
 		"Print payloads.",
-	).Default("false").Bool()
-	payloads = kingpin.Flag(
+	).Default("false").Envar("GOUDPSCAN_PRINT").Bool()
+	payloads = cli.Flag(
 		"payloads",
 		"Paylaods yml config file.",
-	).Short('l').String()
-	fast = kingpin.Flag(
+	).Short('l').Envar("GOUDPSCAN_PAYLOADS").String()
+	fast = cli.Flag(
 		"fast",
 		"Fast scan mode. Only \"Open\" or \"Unknown\" statuses.",
-	).Default("false").Short('f').Bool()
-	timeout = kingpin.Flag(
+	).Default("false").Short('f').Envar("GOUDPSCAN_FAST").Bool()
+	timeout = cli.Flag(
 		"timeout",
 		"Timeout. Time to wait for response in seconds.",
-	).Default("1").Short('t').Uint()
-	recheck = kingpin.Flag(
+	).Default("1").Short('t').Envar("GOUDPSCAN_TIMEOUT").Uint()
+	recheck = cli.Flag(
 		"recheck",
 		"Recheck. How many times to check every port.",
-	).Default("0").Short('r').Uint8()
-	maxConcurrency = kingpin.Flag(
-		"maxConcurrency",
+	).Default("0").Short('r').Envar("GOUDPSCAN_RECHECK").Uint8()
+	maxConcurrency = cli.Flag(
+		"max-concurrency",
 		"Maximum concurrency. Number of concurrent requests.",
-	).Default("768").Short('c').Int()
-	sort = kingpin.Flag(
+	).Default("768").Short('c').Envar("GOUDPSCAN_MAX_CONCURRENCY").Int()
+	sort = cli.Flag(
 		"sort",
 		"Sort results.",
-	).Default("false").Short('s').Bool()
-	ports = kingpin.Flag(
+	).Default("false").Short('s').Envar("GOUDPSCAN_SORT").Bool()
+	ports = cli.Flag(
 		"ports",
 		"Ports to scan.",
-	).Default("7-1024").Short('p').Strings()
-	hosts = kingpin.Arg(
+	).Default("7-1024").Short('p').Envar("GOUDPSCAN_PORTS").Strings()
+	hosts = cli.Arg(
 		"hosts",
 		"Hosts to scan.",
-	).Default("127.0.0.1").Strings()
+	).Default("127.0.0.1").Envar("GOUDPSCAN_HOSTS").Strings()
 )
 
 //go:embed payloads.yml
 var payloadsFS embed.FS
+
+func main() {
+	cli.Parse(os.Args[1:])
+	opts := goudpscan.NewOptions(*fast, *timeout, *recheck, *maxConcurrency)
+
+	initLogger()
+
+	var payloadFile []byte
+	var err error
+	if *payloads == "" {
+		payloadFile, err = payloadsFS.ReadFile("payloads.yml")
+	} else {
+		payloadFile, err = os.ReadFile(*payloads)
+	}
+	if err != nil {
+		log.Fatal().Err(err).Msg("read file with payloads")
+	}
+	if *print {
+		fmt.Printf(string(payloadFile))
+		return
+	}
+	payloadData := make(map[string][]string)
+	if err = yaml.Unmarshal(payloadFile, &payloadData); err != nil {
+		log.Fatal().Err(err).Msg("unmarshal payloads")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	if !*fast {
+		wg.Add(1)
+		go func() {
+			if err := goudpscan.SniffICMP(ctx, &wg); err != nil {
+				log.Error().Err(err).Msg("sniff ICMP")
+			}
+		}()
+	}
+	pl, err := FormPayload(payloadData)
+	if err != nil {
+		log.Fatal().Err(err).Msg("form payload")
+	}
+	sc := goudpscan.New(*hosts, *ports, pl, opts)
+
+	start := time.Now()
+	result, err := sc.Scan(&log.Logger)
+	if err != nil {
+		log.Fatal().Err(err).Msg("scan")
+	}
+
+	// Stop the sniffer
+	cancel()
+	wg.Wait()
+
+	keys := make([]string, len(result))
+	i := 0
+	for k := range result {
+		keys[i] = k
+		i++
+	}
+	if *sort {
+		resultChan := make(chan []string, 1)
+		MergeSortAsync(keys, resultChan)
+		keys = <-resultChan
+	}
+	elapsed := time.Since(start)
+	for _, k := range keys {
+		hp := strings.Split(k, ":")
+		log.Info().Str("host", hp[0]).Str("port", hp[1]).
+			Str("status", fmt.Sprintf("%v", result[k])).Msg("")
+	}
+	log.Info().Int("entities-scanned", len(result)).Msg("")
+	log.Info().Dur("elapsed-time", elapsed).Msg("")
+}
+
+func initLogger() {
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+
+	if *logJson {
+		log.Logger = zerolog.New(os.Stdout).With().Timestamp().Logger()
+	} else {
+		output := zerolog.ConsoleWriter{Out: os.Stdout, PartsExclude: []string{"time"}}
+		log.Logger = log.Output(output)
+	}
+
+	setLogLevel(*logLevel)
+}
+
+func setLogLevel(logLevel string) {
+	switch logLevel {
+	case "debug":
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	case "info":
+		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	case "warn":
+		zerolog.SetGlobalLevel(zerolog.WarnLevel)
+	case "error":
+		zerolog.SetGlobalLevel(zerolog.ErrorLevel)
+	case "fatal":
+		zerolog.SetGlobalLevel(zerolog.FatalLevel)
+	case "panic":
+		zerolog.SetGlobalLevel(zerolog.PanicLevel)
+	default:
+		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	}
+}
 
 func MergeSortAsync(arr []string, resultChan chan []string) {
 	l := len(arr)
@@ -140,73 +255,4 @@ func FormPayload(payloadData map[string][]string) (map[uint16][]string, error) {
 	}
 
 	return payload, nil
-}
-
-func main() {
-	kingpin.Parse()
-	opts := goudpscan.NewOptions(*fast, *timeout, *recheck, *maxConcurrency)
-	ch := make(chan bool)
-
-	errl := log.New(os.Stdout, "ERR", log.LstdFlags)
-
-	var payloadFile []byte
-	var err error
-	if *payloads == "" {
-		payloadFile, err = payloadsFS.ReadFile("payloads.yml")
-	} else {
-		payloadFile, err = os.ReadFile(*payloads)
-	}
-	if err != nil {
-		errl.Fatalf("read file with payloads: %s", err)
-	}
-	if *print {
-		fmt.Printf(string(payloadFile))
-		return
-	}
-	payloadData := make(map[string][]string)
-	if err = yaml.Unmarshal(payloadFile, &payloadData); err != nil {
-		errl.Fatalf("parse payloads file: %s", err)
-	}
-
-	var wg sync.WaitGroup
-	if !*fast {
-		wg.Add(1)
-		go func() {
-			if err := goudpscan.SniffICMP(ch, &wg); err != nil {
-				errl.Printf("sniff ICMP: %s", err)
-			}
-		}()
-	}
-	pl, err := FormPayload(payloadData)
-	if err != nil {
-		errl.Fatalf("form payload: %s", err)
-	}
-	sc := goudpscan.New(*hosts, *ports, pl, opts)
-
-	start := time.Now()
-	result, err := sc.Scan(errl, ch)
-	if err != nil {
-		errl.Fatalf("scan: %s", err)
-	}
-	keys := make([]string, len(result))
-	i := 0
-	for k := range result {
-		keys[i] = k
-		i++
-	}
-	if *sort {
-		resultChan := make(chan []string, 1)
-		MergeSortAsync(keys, resultChan)
-		keys = <-resultChan
-	}
-	elapsed := time.Since(start)
-	for _, k := range keys {
-		t := "\t"
-		if len(k)/8 <= 1 {
-			t = "\t\t"
-		}
-		fmt.Println(fmt.Sprintf("%s%s%v", k, t, result[k]))
-	}
-	fmt.Println("Elapsed time: ", elapsed)
-	wg.Wait()
 }
