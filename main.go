@@ -70,7 +70,9 @@ var (
 var payloadsFS embed.FS
 
 func main() {
-	cli.Parse(os.Args[1:])
+	if _, err := cli.Parse(os.Args[1:]); err != nil {
+		log.Panic().Err(err).Msg("parse cli args")
+	}
 	opts := goudpscan.NewOptions(*fast, *timeout, *recheck, *maxConcurrency)
 
 	initLogger()
@@ -83,37 +85,41 @@ func main() {
 		payloadFile, err = os.ReadFile(*payloads)
 	}
 	if err != nil {
-		log.Fatal().Err(err).Msg("read file with payloads")
+		log.Panic().Err(err).Msg("read file with payloads")
 	}
 	if *print {
-		fmt.Printf(string(payloadFile))
+		fmt.Println(string(payloadFile))
 		return
 	}
+
 	payloadData := make(map[string][]string)
 	if err = yaml.Unmarshal(payloadFile, &payloadData); err != nil {
-		log.Fatal().Err(err).Msg("unmarshal payloads")
+		log.Error().Err(err).Msg("unmarshal payloads")
+		return
 	}
+	pl, err := FormPayload(payloadData)
+	if err != nil {
+		log.Error().Err(err).Msg("form payload")
+		return
+	}
+	sc := goudpscan.New(*hosts, *ports, pl, opts)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	if !*fast {
 		wg.Add(1)
 		go func() {
-			if err := goudpscan.SniffICMP(ctx, &wg); err != nil {
+			if err := sc.SniffICMP(ctx, &wg); err != nil {
 				log.Error().Err(err).Msg("sniff ICMP")
 			}
 		}()
 	}
-	pl, err := FormPayload(payloadData)
-	if err != nil {
-		log.Fatal().Err(err).Msg("form payload")
-	}
-	sc := goudpscan.New(*hosts, *ports, pl, opts)
 
 	start := time.Now()
 	result, err := sc.Scan(&log.Logger)
 	if err != nil {
-		log.Fatal().Err(err).Msg("scan")
+		log.Error().Err(err).Msg("scan")
+		return
 	}
 
 	// Stop the sniffer
@@ -185,9 +191,15 @@ func MergeSortAsync(arr []string, resultChan chan []string) {
 	lchan := make(chan []string, 1)
 	rchan := make(chan []string, 1)
 
-	go MergeSortAsync(arr[0:m], lchan)
-	go MergeSortAsync(arr[m:l], rchan)
-	go MergeAsync(<-lchan, <-rchan, resultChan)
+	if m >= 16 {
+		go MergeSortAsync(arr[0:m], lchan)
+		go MergeSortAsync(arr[m:l], rchan)
+		go MergeAsync(<-lchan, <-rchan, resultChan)
+	} else {
+		MergeSortAsync(arr[0:m], lchan)
+		MergeSortAsync(arr[m:l], rchan)
+		MergeAsync(<-lchan, <-rchan, resultChan)
+	}
 }
 
 func MergeAsync(left []string, right []string, resultChannel chan []string) {

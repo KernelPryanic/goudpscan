@@ -11,6 +11,7 @@ import (
 	"github.com/KernelPryanic/goudpscan/goudpscan"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewOptions(t *testing.T) {
@@ -43,9 +44,7 @@ func TestSegmentation(t *testing.T) {
 
 	for _, test := range tests {
 		segments := goudpscan.Segmentation(test.subnet)
-		if !equal(segments, test.expected) {
-			t.Errorf("Segmentation(%q) = %v; expected %v", test.subnet, segments, test.expected)
-		}
+		require.Equal(t, test.expected, segments)
 	}
 }
 
@@ -77,12 +76,10 @@ func TestBreakUpIP(t *testing.T) {
 
 	for _, test := range tests {
 		ips, err := goudpscan.BreakUpIP(test.segments)
-		if (err != nil) != test.expectedErr {
-			t.Errorf("BreakUpIP(%v) returned an error: %v", test.segments, err)
-			continue
-		}
-		if !equal(ips, test.expected) {
-			t.Errorf("BreakUpIP(%v) = %v; expected %v", test.segments, ips, test.expected)
+		if test.expectedErr {
+			require.Error(t, err)
+		} else {
+			require.Equal(t, test.expected, ips)
 		}
 	}
 }
@@ -103,12 +100,10 @@ func TestParseSubnet(t *testing.T) {
 
 	for _, test := range tests {
 		subnets, err := goudpscan.ParseSubnet(test.subnet)
-		if (err != nil) != test.expectedErr {
-			t.Errorf("ParseSubnet(%q) returned an error: %v", test.subnet, err)
-			continue
-		}
-		if !equal(subnets, test.expected) {
-			t.Errorf("ParseSubnet(%q) = %v; expected %v", test.subnet, subnets, test.expected)
+		if test.expectedErr {
+			require.Error(t, err)
+		} else {
+			require.Equal(t, test.expected, subnets)
 		}
 	}
 }
@@ -129,12 +124,10 @@ func TestBreakUPPort(t *testing.T) {
 
 	for _, test := range tests {
 		ports, err := goudpscan.BreakUPPort(test.portRange)
-		if (err != nil) != test.expectedErr {
-			t.Errorf("BreakUPPort(%q) returned an error: %v", test.portRange, err)
-			continue
-		}
-		if !equalInt(ports, test.expected) {
-			t.Errorf("BreakUPPort(%q) = %v; expected %v", test.portRange, ports, test.expected)
+		if test.expectedErr {
+			require.Error(t, err)
+		} else {
+			require.Equal(t, test.expected, ports)
 		}
 	}
 }
@@ -166,12 +159,10 @@ func TestHosts(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := goudpscan.Hosts(test.cidr)
-			if (err != nil) != test.expectedErr {
-				t.Errorf("Hosts() error = %v, expectedErr %v", err, test.expectedErr)
-				return
-			}
-			if !equal(got, test.expected) {
-				t.Errorf("Hosts() = %v, expected %v", got, test.expected)
+			if test.expectedErr {
+				require.Error(t, err)
+			} else {
+				require.Equal(t, test.expected, got)
 			}
 		})
 	}
@@ -192,7 +183,7 @@ func TestScan(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
-		if err := goudpscan.SniffICMP(ctx, &wg); err != nil && !errors.Is(err, net.ErrClosed) {
+		if err := sc.SniffICMP(ctx, &wg); err != nil && !errors.Is(err, net.ErrClosed) {
 			t.Errorf("SniffICMP failed: %v", err)
 		}
 	}()
@@ -210,34 +201,9 @@ func TestScan(t *testing.T) {
 	if _, ok := scanResult[expectedKey]; !ok {
 		t.Errorf("Scan result does not contain the expected key: %s", expectedKey)
 	}
+	require.Len(t, scanResult, 1)
 
 	// Stop the SniffICMP function
 	cancel()
 	wg.Wait()
-}
-
-// Helper function to compare two string slices
-func equal(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i, v := range a {
-		if v != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// Helper function to compare two int slices
-func equalInt(a, b []uint16) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i, v := range a {
-		if v != b[i] {
-			return false
-		}
-	}
-	return true
 }

@@ -3,7 +3,7 @@
 
 # **goudpscan**
 
-Fastest UDP port scanner you've ever seen.
+Probably the fastest UDP port scanner.
 
 ## Build
 
