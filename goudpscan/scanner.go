@@ -234,6 +234,7 @@ func (s *Scanner) SendRequests(
 				throttle <- 1
 				if !opts.fast {
 					throttleLocal <- 1
+					writeAsync(s.currentPort, ip, port, &s.currentPortLock)
 				}
 				conn, err := sendRequest(ip, port, pld)
 				if err != nil {
@@ -241,9 +242,6 @@ func (s *Scanner) SendRequests(
 					continue
 				}
 				go s.waitResponse(conn, ip, port, opts, &wgPorts, throttle, throttleLocal)
-				if !opts.fast {
-					writeAsync(s.currentPort, ip, port, &s.currentPortLock)
-				}
 			}
 		}
 	}
@@ -275,11 +273,11 @@ func (s *Scanner) waitResponse(conn net.Conn,
 ) {
 	defer wg.Done()
 	if err := readResponse(conn, opts); err == nil {
-		writeAsync(s.scanData, fmt.Sprintf("%v:%v", ip, port), "Open", &s.scanDataLock)
+		writeAsync(s.scanData, fmt.Sprintf("%v:%v", ip, port), "open", &s.scanDataLock)
 	} else {
 		status := readAsync(s.scanData, fmt.Sprintf("%v:%v", ip, port), &s.scanDataLock)
 		if status == "" {
-			writeAsync(s.scanData, fmt.Sprintf("%v:%v", ip, port), "Unknown", &s.scanDataLock)
+			writeAsync(s.scanData, fmt.Sprintf("%v:%v", ip, port), "unknown", &s.scanDataLock)
 		}
 	}
 
@@ -338,14 +336,17 @@ func (s *Scanner) SniffICMP(ctx context.Context, wg *sync.WaitGroup) error {
 		}
 
 		port := readAsync(s.currentPort, peer.String(), &s.currentPortLock)
+		if port == 0 {
+			continue
+		}
 		status := readAsync(s.scanData, fmt.Sprintf("%v:%v", peer.String(), port), &s.scanDataLock)
 		if rm.Type == ipv4.ICMPTypeDestinationUnreachable && rm.Code == 3 {
-			if status != "Open" {
-				writeAsync(s.scanData, fmt.Sprintf("%v:%v", peer.String(), port), "Closed", &s.scanDataLock)
+			if status != "open" {
+				writeAsync(s.scanData, fmt.Sprintf("%v:%v", peer.String(), port), "closed", &s.scanDataLock)
 			}
 		} else {
-			if status == "" || status == "Unknown" {
-				writeAsync(s.scanData, fmt.Sprintf("%v:%v", peer.String(), port), "Filtered", &s.scanDataLock)
+			if status == "" || status == "unknown" {
+				writeAsync(s.scanData, fmt.Sprintf("%v:%v", peer.String(), port), "filtered", &s.scanDataLock)
 			}
 		}
 	}

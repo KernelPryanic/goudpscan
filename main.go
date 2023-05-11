@@ -115,6 +115,8 @@ func main() {
 		}()
 	}
 
+	time.Sleep(250 * time.Millisecond)
+
 	start := time.Now()
 	result, err := sc.Scan(&log.Logger)
 	if err != nil {

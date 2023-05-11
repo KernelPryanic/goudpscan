@@ -188,7 +188,7 @@ func TestScan(t *testing.T) {
 		}
 	}()
 
-	time.Sleep(1 * time.Second)
+	time.Sleep(250 * time.Millisecond)
 
 	// Run the Scan function
 	scanResult, err := sc.Scan(&log.Logger)
