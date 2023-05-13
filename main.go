@@ -13,7 +13,6 @@ import (
 	"github.com/KernelPryanic/goudpscan/goudpscan"
 	"github.com/mcuadros/go-version"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"gopkg.in/alecthomas/kingpin.v2"
 	"gopkg.in/yaml.v3"
 )
@@ -71,11 +70,10 @@ var payloadsFS embed.FS
 
 func main() {
 	if _, err := cli.Parse(os.Args[1:]); err != nil {
-		log.Panic().Err(err).Msg("parse cli args")
+		panic(err)
 	}
 	opts := goudpscan.NewOptions(*fast, *timeout, *recheck, *maxConcurrency)
-
-	initLogger()
+	log := initLogger()
 
 	var payloadFile []byte
 	var err error
@@ -118,7 +116,7 @@ func main() {
 	time.Sleep(250 * time.Millisecond)
 
 	start := time.Now()
-	result, err := sc.Scan(&log.Logger)
+	result, err := sc.Scan(log)
 	if err != nil {
 		log.Error().Err(err).Msg("scan")
 		return
@@ -149,36 +147,35 @@ func main() {
 	log.Info().Dur("elapsed-time", elapsed).Msg("")
 }
 
-func initLogger() {
+func initLogger() *zerolog.Logger {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 
+	var log zerolog.Logger
 	if *logJson {
-		log.Logger = zerolog.New(os.Stdout).With().Timestamp().Logger()
+		log = zerolog.New(os.Stdout).With().Timestamp().Logger()
 	} else {
 		output := zerolog.ConsoleWriter{Out: os.Stdout, PartsExclude: []string{"time"}}
-		log.Logger = log.Output(output)
+		log = zerolog.New(output).With().Logger()
 	}
 
-	setLogLevel(*logLevel)
-}
-
-func setLogLevel(logLevel string) {
-	switch logLevel {
+	switch *logLevel {
 	case "debug":
-		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+		log = log.Level(zerolog.DebugLevel)
 	case "info":
-		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+		log = log.Level(zerolog.InfoLevel)
 	case "warn":
-		zerolog.SetGlobalLevel(zerolog.WarnLevel)
+		log = log.Level(zerolog.WarnLevel)
 	case "error":
-		zerolog.SetGlobalLevel(zerolog.ErrorLevel)
+		log = log.Level(zerolog.ErrorLevel)
 	case "fatal":
-		zerolog.SetGlobalLevel(zerolog.FatalLevel)
+		log = log.Level(zerolog.FatalLevel)
 	case "panic":
-		zerolog.SetGlobalLevel(zerolog.PanicLevel)
+		log = log.Level(zerolog.PanicLevel)
 	default:
-		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+		log = log.Level(zerolog.InfoLevel)
 	}
+
+	return &log
 }
 
 func MergeSortAsync(arr []string, resultChan chan []string) {
