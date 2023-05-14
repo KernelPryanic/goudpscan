@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/KernelPryanic/goudpscan/goudpscan"
+	"github.com/KernelPryanic/goudpscan/unsafe"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,13 +34,13 @@ func TestNewScanner(t *testing.T) {
 
 func TestSegmentation(t *testing.T) {
 	tests := []struct {
-		subnet   string
-		expected []string
+		subnet   []byte
+		expected [][]byte
 	}{
-		{"192.168.0.1", []string{"192", "168", "0", "1"}},
-		{"10.0.0.0/24", []string{"10", "0", "0", "0", "24"}},
-		{"10.0.0.1-10", []string{"10", "0", "0", "1-10"}},
-		{"10.0.0.1-10/24", []string{"10", "0", "0", "1-10", "24"}},
+		{[]byte("192.168.0.1"), [][]byte{[]byte("192"), []byte("168"), []byte("0"), []byte("1")}},
+		{[]byte("10.0.0.0/24"), [][]byte{[]byte("10"), []byte("0"), []byte("0"), []byte("0"), []byte("24")}},
+		{[]byte("10.0.0.1-10"), [][]byte{[]byte("10"), []byte("0"), []byte("0"), []byte("1-10")}},
+		{[]byte("10.0.0.1-10/24"), [][]byte{[]byte("10"), []byte("0"), []byte("0"), []byte("1-10"), []byte("24")}},
 	}
 
 	for _, test := range tests {
@@ -50,26 +51,32 @@ func TestSegmentation(t *testing.T) {
 
 func TestBreakUpIP(t *testing.T) {
 	tests := []struct {
-		segments    []string
-		expected    []string
+		segments    [][]byte
+		expected    [][]byte
 		expectedErr bool
 	}{
-		{segments: []string{"192", "168", "0", "1"}, expected: []string{"192.168.0.1"}},
-		{segments: []string{"10", "0", "0", "1-3"}, expected: []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}},
 		{
-			segments: []string{"10", "0-1", "0", "1-3"},
-			expected: []string{"10.0.0.1", "10.0.0.2", "10.0.0.3", "10.1.0.1", "10.1.0.2", "10.1.0.3"},
+			segments: [][]byte{[]byte("192"), []byte("168"), []byte("0"), []byte("1")},
+			expected: [][]byte{[]byte("192.168.0.1")},
 		},
 		{
-			segments:    []string{"10", "0,1-2", "0", "24"},
+			segments: [][]byte{[]byte("10"), []byte("0"), []byte("0"), []byte("1-3")},
+			expected: [][]byte{[]byte("10.0.0.1"), []byte("10.0.0.2"), []byte("10.0.0.3")},
+		},
+		{
+			segments: [][]byte{[]byte("10"), []byte("0-1"), []byte("0"), []byte("1-3")},
+			expected: [][]byte{[]byte("10.0.0.1"), []byte("10.0.0.2"), []byte("10.0.0.3"), []byte("10.1.0.1"), []byte("10.1.0.2"), []byte("10.1.0.3")},
+		},
+		{
+			segments:    [][]byte{[]byte("10"), []byte("0,1-2"), []byte("0"), []byte("24")},
 			expectedErr: true,
 		},
 		{
-			segments:    []string{"10", "0-1,1", "0", "24"},
+			segments:    [][]byte{[]byte("10"), []byte("0-1,1"), []byte("0"), []byte("24")},
 			expectedErr: true,
 		},
 		{
-			segments:    []string{"10", "0-1", "0,1-1", "24"},
+			segments:    [][]byte{[]byte("10"), []byte("0-1"), []byte("0,1-1"), []byte("24")},
 			expectedErr: true,
 		},
 	}
@@ -87,19 +94,19 @@ func TestBreakUpIP(t *testing.T) {
 func TestParseSubnet(t *testing.T) {
 	tests := []struct {
 		subnet      string
-		expected    []string
+		expected    [][]byte
 		expectedErr bool
 	}{
-		{subnet: "192.168.0.1", expected: []string{"192.168.0.1"}},
-		{subnet: "10.0.0.0/24", expected: []string{"10.0.0.0/24"}},
-		{subnet: "10.0.0.1-4", expected: []string{"10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4"}},
-		{subnet: "10.0.0.1-2/24", expected: []string{"10.0.0.1/24", "10.0.0.2/24"}},
+		{subnet: "192.168.0.1", expected: [][]byte{[]byte("192.168.0.1")}},
+		{subnet: "10.0.0.0/24", expected: [][]byte{[]byte("10.0.0.0/24")}},
+		{subnet: "10.0.0.1-4", expected: [][]byte{[]byte("10.0.0.1"), []byte("10.0.0.2"), []byte("10.0.0.3"), []byte("10.0.0.4")}},
+		{subnet: "10.0.0.1-2/24", expected: [][]byte{[]byte("10.0.0.1/24"), []byte("10.0.0.2/24")}},
 		{subnet: "10.0,1-2.1-2/24", expectedErr: true},
 		{subnet: "10.0,1-2.1-2", expectedErr: true},
 	}
 
 	for _, test := range tests {
-		subnets, err := goudpscan.ParseSubnet(test.subnet)
+		subnets, err := goudpscan.ParseSubnet(unsafe.S2B(test.subnet))
 		if test.expectedErr {
 			require.Error(t, err)
 		} else {
@@ -110,16 +117,16 @@ func TestParseSubnet(t *testing.T) {
 
 func TestBreakUPPort(t *testing.T) {
 	tests := []struct {
-		portRange   string
+		portRange   []byte
 		expected    []uint16
 		expectedErr bool
 	}{
-		{portRange: "80", expected: []uint16{80}},
-		{portRange: "22-25", expected: []uint16{22, 23, 24, 25}},
-		{portRange: "22-25,80", expected: []uint16{22, 23, 24, 25, 80}},
-		{portRange: "80.0", expectedErr: true},
-		{portRange: "22.2-25", expectedErr: true},
-		{portRange: "22-25.5", expectedErr: true},
+		{portRange: []byte("80"), expected: []uint16{80}},
+		{portRange: []byte("22-25"), expected: []uint16{22, 23, 24, 25}},
+		{portRange: []byte("22-25,80"), expected: []uint16{22, 23, 24, 25, 80}},
+		{portRange: []byte("80.0"), expectedErr: true},
+		{portRange: []byte("22.2-25"), expectedErr: true},
+		{portRange: []byte("22-25.5"), expectedErr: true},
 	}
 
 	for _, test := range tests {
@@ -135,23 +142,23 @@ func TestBreakUPPort(t *testing.T) {
 func TestHosts(t *testing.T) {
 	tests := []struct {
 		name        string
-		cidr        string
-		expected    []string
+		cidr        []byte
+		expected    [][]byte
 		expectedErr bool
 	}{
 		{
 			name:     "Single IP",
-			cidr:     "192.168.1.1",
-			expected: []string{"192.168.1.1"},
+			cidr:     []byte("192.168.1.1"),
+			expected: [][]byte{[]byte("192.168.1.1")},
 		},
 		{
 			name:     "CIDR /30",
-			cidr:     "192.168.1.0/30",
-			expected: []string{"192.168.1.0", "192.168.1.1", "192.168.1.2", "192.168.1.3"},
+			cidr:     []byte("192.168.1.0/30"),
+			expected: [][]byte{[]byte("192.168.1.0"), []byte("192.168.1.1"), []byte("192.168.1.2"), []byte("192.168.1.3")},
 		},
 		{
 			name:        "Invalid CIDR",
-			cidr:        "192.168.1.256/24",
+			cidr:        []byte("192.168.1.256/24"),
 			expectedErr: true,
 		},
 	}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/KernelPryanic/goudpscan/goudpscan"
+	"github.com/KernelPryanic/goudpscan/unsafe"
 	"github.com/mcuadros/go-version"
 	"github.com/rs/zerolog"
 	"gopkg.in/alecthomas/kingpin.v2"
@@ -95,7 +96,7 @@ func main() {
 		log.Error().Err(err).Msg("unmarshal payloads")
 		return
 	}
-	pl, err := FormPayload(payloadData)
+	pl, err := FormPayload(log, payloadData)
 	if err != nil {
 		log.Error().Err(err).Msg("form payload")
 		return
@@ -141,10 +142,34 @@ func main() {
 	for _, k := range keys {
 		hp := strings.Split(k, ":")
 		log.Info().Str("host", hp[0]).Str("port", hp[1]).
-			Str("status", fmt.Sprintf("%v", result[k])).Msg("")
+			Bytes("status", result[k]).Msg("")
 	}
 	log.Info().Int("entities-scanned", len(result)).Msg("")
 	log.Info().Dur("elapsed-time", elapsed).Msg("")
+}
+
+func FormPayload(log *zerolog.Logger, payloadData map[string][]string) (map[uint16][]string, error) {
+	payload := map[uint16][]string{}
+
+	for k, v := range payloadData {
+		ports, err := goudpscan.BreakUPPort(unsafe.S2B(k))
+		if err != nil {
+			return nil, fmt.Errorf("break up port: %w", err)
+		}
+		for _, p := range ports {
+			for i, data := range v {
+				d := fmt.Sprintf("`%s`", strings.ReplaceAll(data, " ", ""))
+				s, err := strconv.Unquote(d)
+				if err != nil {
+					log.Error().Err(err).Uint16("port", p).Int("payload-index", i).Str("payload", d).Msg("parse payload")
+					continue
+				}
+				payload[p] = append(payload[p], s)
+			}
+		}
+	}
+
+	return payload, nil
 }
 
 func initLogger() *zerolog.Logger {
@@ -247,23 +272,4 @@ func MergeAsync(left []string, right []string, resultChannel chan []string) {
 	}
 
 	resultChannel <- result
-}
-
-func FormPayload(payloadData map[string][]string) (map[uint16][]string, error) {
-	payload := map[uint16][]string{}
-
-	for k, v := range payloadData {
-		ports, err := goudpscan.BreakUPPort(k)
-		if err != nil {
-			return nil, fmt.Errorf("break up port: %w", err)
-		}
-		for _, p := range ports {
-			for _, data := range v {
-				s, _ := strconv.Unquote(fmt.Sprintf(`"%s"`, strings.ReplaceAll(data, " ", "")))
-				payload[p] = append(payload[p], s)
-			}
-		}
-	}
-
-	return payload, nil
 }
