@@ -1,4 +1,4 @@
-package main
+package tooling
 
 import (
 	"testing"
@@ -39,7 +39,7 @@ func TestFormPayload(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run("", func(t *testing.T) {
-			actual, err := formPayload(&logger, tc.payloadMap)
+			actual, err := FormPayload(&logger, tc.payloadMap)
 			require.NoError(t, err)
 			require.Equal(t, tc.expected, actual)
 		})
@@ -67,7 +67,7 @@ func TestMergeSortAsync(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			resultChan := make(chan []string, 1)
-			mergeSortAsync(tc.input, resultChan)
+			MergeSortAsync(tc.input, resultChan)
 			actual := <-resultChan
 			require.Equal(t, tc.expected, actual)
 		})

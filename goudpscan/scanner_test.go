@@ -1,4 +1,4 @@
-package goudpscan_test
+package goudpscan
 
 import (
 	"context"
@@ -8,21 +8,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KernelPryanic/goudpscan/goudpscan"
 	"github.com/KernelPryanic/goudpscan/unsafe"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNewOptions(t *testing.T) {
-	options := goudpscan.NewOptions(true, uint(10), uint8(3), 2)
+	options := NewOptions(true, uint(10), uint8(3), 2)
 
 	assert.NotNil(t, options, "NewOptions should not return nil")
 }
 
 func TestNewScanner(t *testing.T) {
-	scanner := goudpscan.New(
-		goudpscan.NewOptions(true, uint(10), uint8(3), 2),
+	scanner := New(
+		NewOptions(true, uint(10), uint8(3), 2),
 		[]string{"127.0.0.1"},
 		[]string{"80"},
 		map[uint16][]string{},
@@ -43,7 +42,7 @@ func TestSegmentation(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		segments := goudpscan.Segmentation(test.subnet)
+		segments := Segmentation(test.subnet)
 		require.Equal(t, test.expected, segments)
 	}
 }
@@ -81,7 +80,7 @@ func TestBreakUpIP(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		ips, err := goudpscan.BreakUpIP(test.segments)
+		ips, err := BreakUpIP(test.segments)
 		if test.expectedErr {
 			require.Error(t, err)
 		} else {
@@ -105,7 +104,7 @@ func TestParseSubnet(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		subnets, err := goudpscan.ParseSubnet(unsafe.S2B(test.subnet))
+		subnets, err := ParseSubnet(unsafe.S2B(test.subnet))
 		if test.expectedErr {
 			require.Error(t, err)
 		} else {
@@ -129,7 +128,7 @@ func TestBreakUPPort(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		ports, err := goudpscan.BreakUPPort(test.portRange)
+		ports, err := BreakUPPort(test.portRange)
 		if test.expectedErr {
 			require.Error(t, err)
 		} else {
@@ -164,7 +163,7 @@ func TestHosts(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := goudpscan.Hosts(test.cidr)
+			got, err := Hosts(test.cidr)
 			if test.expectedErr {
 				require.Error(t, err)
 			} else {
@@ -178,9 +177,9 @@ func TestScan(t *testing.T) {
 	hosts := []string{"127.0.0.1"}
 	ports := []string{"80"}
 	payloads := make(map[uint16][]string)
-	opts := goudpscan.NewOptions(true, 1, 0, 1)
+	opts := NewOptions(true, 1, 0, 1)
 
-	sc := goudpscan.New(opts, hosts, ports, payloads)
+	sc := New(opts, hosts, ports, payloads)
 
 	// Create a context to stop the SniffICMP function
 	ctx, cancel := context.WithCancel(context.Background())
@@ -196,7 +195,7 @@ func TestScan(t *testing.T) {
 
 	time.Sleep(250 * time.Millisecond)
 
-	errors := make(chan goudpscan.ScannerError, 8)
+	errors := make(chan ScannerError, 8)
 	ctx, cancelErrHandler := context.WithCancel(context.Background())
 	go HelperErrorHandler(t, ctx, errors)
 	// Run the Scan function
@@ -215,7 +214,7 @@ func TestScan(t *testing.T) {
 	wg.Wait()
 }
 
-func HelperErrorHandler(t *testing.T, ctx context.Context, errors <-chan goudpscan.ScannerError) {
+func HelperErrorHandler(t *testing.T, ctx context.Context, errors <-chan ScannerError) {
 	for {
 		select {
 		case err := <-errors:

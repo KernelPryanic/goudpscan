@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/KernelPryanic/goudpscan/goudpscan"
+	"github.com/KernelPryanic/goudpscan/tooling"
+	"github.com/rs/zerolog"
 	"gopkg.in/alecthomas/kingpin.v2"
 	"gopkg.in/yaml.v3"
 )
@@ -54,11 +56,11 @@ var (
 	).Default("false").Short('s').Envar("GOUDPSCAN_SORT").Bool()
 	ports = cli.Flag(
 		"ports",
-		"Ports to scan.",
+		"Ports to scan. Separated by commas and/or range: 80,443-1024",
 	).Default("7-1024").Short('p').Envar("GOUDPSCAN_PORTS").Strings()
 	hosts = cli.Arg(
 		"hosts",
-		"Hosts to scan.",
+		"Hosts to scan. Separated by spaces and/or range and/or CIDR: 127.1.0.1 127.0.0-32.0/24",
 	).Default("127.0.0.1").Envar("GOUDPSCAN_HOSTS").Strings()
 )
 
@@ -92,7 +94,7 @@ func main() {
 		log.Error().Err(err).Msg("unmarshal payloads")
 		return
 	}
-	pl, err := formPayload(log, payloadData)
+	pl, err := tooling.FormPayload(log, payloadData)
 	if err != nil {
 		log.Error().Err(err).Msg("form payload")
 		return
@@ -114,7 +116,7 @@ func main() {
 
 	errors := make(chan goudpscan.ScannerError, 8)
 	ctx, cancelErrHandler := context.WithCancel(context.Background())
-	go errorHandler(ctx, errors)
+	go tooling.ErrorHandler(log, ctx, errors)
 
 	start := time.Now()
 	result := sc.Scan(errors, start.UnixNano())
@@ -132,7 +134,7 @@ func main() {
 	}
 	if *sort {
 		resultChan := make(chan []string, 1)
-		mergeSortAsync(keys, resultChan)
+		tooling.MergeSortAsync(keys, resultChan)
 		keys = <-resultChan
 	}
 	elapsed := time.Since(start)
@@ -143,4 +145,35 @@ func main() {
 	}
 	log.Info().Int("entities-scanned", len(result)).Msg("")
 	log.Info().Dur("elapsed-time", elapsed).Msg("")
+}
+
+func initLogger() *zerolog.Logger {
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+
+	var log zerolog.Logger
+	if *logJson {
+		log = zerolog.New(os.Stdout).With().Timestamp().Logger()
+	} else {
+		output := zerolog.ConsoleWriter{Out: os.Stdout, PartsExclude: []string{"time"}}
+		log = zerolog.New(output).With().Logger()
+	}
+
+	switch *logLevel {
+	case "debug":
+		log = log.Level(zerolog.DebugLevel)
+	case "info":
+		log = log.Level(zerolog.InfoLevel)
+	case "warn":
+		log = log.Level(zerolog.WarnLevel)
+	case "error":
+		log = log.Level(zerolog.ErrorLevel)
+	case "fatal":
+		log = log.Level(zerolog.FatalLevel)
+	case "panic":
+		log = log.Level(zerolog.PanicLevel)
+	default:
+		log = log.Level(zerolog.InfoLevel)
+	}
+
+	return &log
 }
