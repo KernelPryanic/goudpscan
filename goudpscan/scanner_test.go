@@ -10,7 +10,6 @@ import (
 
 	"github.com/KernelPryanic/goudpscan/goudpscan"
 	"github.com/KernelPryanic/goudpscan/unsafe"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,10 +22,10 @@ func TestNewOptions(t *testing.T) {
 
 func TestNewScanner(t *testing.T) {
 	scanner := goudpscan.New(
+		goudpscan.NewOptions(true, uint(10), uint8(3), 2),
 		[]string{"127.0.0.1"},
 		[]string{"80"},
 		map[uint16][]string{},
-		goudpscan.NewOptions(true, uint(10), uint8(3), 2),
 	)
 
 	assert.NotNil(t, scanner, "New should not return nil")
@@ -181,7 +180,7 @@ func TestScan(t *testing.T) {
 	payloads := make(map[uint16][]string)
 	opts := goudpscan.NewOptions(true, 1, 0, 1)
 
-	sc := goudpscan.New(hosts, ports, payloads, opts)
+	sc := goudpscan.New(opts, hosts, ports, payloads)
 
 	// Create a context to stop the SniffICMP function
 	ctx, cancel := context.WithCancel(context.Background())
@@ -197,11 +196,11 @@ func TestScan(t *testing.T) {
 
 	time.Sleep(250 * time.Millisecond)
 
+	errors := make(chan goudpscan.ScannerError, 8)
+	ctx, cancelErrHandler := context.WithCancel(context.Background())
+	go HelperErrorHandler(t, ctx, errors)
 	// Run the Scan function
-	scanResult, err := sc.Scan(&log.Logger)
-	if err != nil {
-		t.Errorf("Scan failed: %v", err)
-	}
+	scanResult := sc.Scan(errors, time.Now().UnixNano())
 
 	// Check the result of the scan
 	expectedKey := "127.0.0.1:80"
@@ -212,5 +211,17 @@ func TestScan(t *testing.T) {
 
 	// Stop the SniffICMP function
 	cancel()
+	cancelErrHandler()
 	wg.Wait()
+}
+
+func HelperErrorHandler(t *testing.T, ctx context.Context, errors <-chan goudpscan.ScannerError) {
+	for {
+		select {
+		case err := <-errors:
+			t.Errorf("Scan failed: %v", err)
+		case <-ctx.Done():
+			return
+		}
+	}
 }

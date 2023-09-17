@@ -8,50 +8,268 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/KernelPryanic/goudpscan/internal/iana"
 	"github.com/KernelPryanic/goudpscan/unsafe"
-	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 )
 
+const MaxBufferSize = 65565
+
+const (
+	EchoReply              = 0
+	DestinationUnreachable = 3
+)
+
+// ScannerError is a custom error structure to handle goroutine errors.
+type ScannerError struct {
+	OrigError      error
+	CustomErrorMsg string
+	Metadata       map[string]interface{}
+}
+
+func (se ScannerError) Error() string {
+	return se.OrigError.Error()
+}
+
 // Scanner is a UDP scanner.
 type Scanner struct {
+	opts            *Options
 	hosts           []string
 	ports           []string
 	payloads        map[uint16][]string
-	opts            *Options
 	scanData        map[string][]byte
-	currentPort     map[string]uint16
+	currentPort     int32
 	scanDataLock    sync.RWMutex
 	currentPortLock sync.RWMutex
 }
 
+// New creates a new Scanner instance.
+// opts: Scanning options.
+// hosts: List of target hosts.
+// ports: List of target ports.
+// payloads: Custom payloads for specific ports.
+// Returns a pointer to the Scanner instance.
 func New(
+	opts *Options,
 	hosts []string,
 	ports []string,
 	payloads map[uint16][]string,
-	opts *Options,
 ) *Scanner {
 	return &Scanner{
-		hosts, ports, payloads, opts,
-		map[string][]byte{}, map[string]uint16{},
+		opts, hosts, ports, payloads,
+		map[string][]byte{}, 0,
 		sync.RWMutex{}, sync.RWMutex{},
 	}
 }
 
-func writeAsync[K comparable, V any](data map[K]V, key K, value V, lock *sync.RWMutex) {
-	lock.Lock()
-	defer lock.Unlock()
-	data[key] = value
+// Scan scans the hosts and ports and returns the results.
+func (s *Scanner) Scan(
+	errors chan<- ScannerError, seed int64,
+) map[string][]byte {
+	wgAll := sync.WaitGroup{}
+	throttleConc := make(chan struct{}, s.opts.maxConcurrency)
+	subnets := [][]byte{}
+	r := rand.New(rand.NewSource(seed))
+
+	for _, host := range s.hosts {
+		r, err := ParseSubnet(unsafe.S2B(host))
+		if err != nil {
+			errors <- ScannerError{
+				OrigError:      err,
+				CustomErrorMsg: "parse subnet",
+			}
+			return nil
+		}
+		subnets = append(subnets, r...)
+	}
+
+	for _, port := range s.ports {
+		ports, err := BreakUPPort(unsafe.S2B(port))
+		if err != nil {
+			errors <- ScannerError{
+				OrigError:      err,
+				CustomErrorMsg: "break up port",
+			}
+			return nil
+		}
+		r.Shuffle(len(ports), func(i, j int) { ports[i], ports[j] = ports[j], ports[i] })
+		for _, p := range ports {
+			if !s.opts.fast {
+				atomic.StoreInt32(&s.currentPort, int32(p))
+			}
+
+			for _, subnet := range subnets {
+				ips, err := Hosts(subnet)
+				if err != nil {
+					log.Error().Err(err).Msg("generate IP")
+				}
+
+				wgAll.Add(1)
+				r.Shuffle(len(ips), func(i, j int) { ips[i], ips[j] = ips[j], ips[i] })
+				go s.SendRequests(errors, &wgAll, s.opts, throttleConc, ips, p, s.payloads)
+			}
+
+			if !s.opts.fast {
+				wgAll.Wait()
+			}
+		}
+	}
+	wgAll.Wait()
+
+	return s.scanData
 }
 
-func readAsync[K comparable, V any](data map[K]V, key K, lock *sync.RWMutex) V {
-	lock.RLock()
-	defer lock.RUnlock()
-	return data[key]
+// SendRequests sends UDP requests with a dedicated payloads to the specified targets.
+func (s *Scanner) SendRequests(
+	errors chan<- ScannerError,
+	wgAll *sync.WaitGroup,
+	opts *Options,
+	throttleConc chan struct{},
+	ips [][]byte,
+	port uint16,
+	payloads map[uint16][]string,
+) {
+	defer wgAll.Done()
+	var plds []string
+	var wgIPs sync.WaitGroup
+
+	for _, ip := range ips {
+		for i := uint8(0); i <= opts.recheck; i++ {
+			if val, ok := payloads[port]; ok {
+				plds = val
+			} else {
+				plds = []string{""}
+			}
+
+			for pi, pld := range plds {
+				wgIPs.Add(1)
+				throttleConc <- struct{}{}
+				conn, err := sendRequest(ip, port, pld)
+				if err != nil {
+					errors <- ScannerError{
+						OrigError:      err,
+						CustomErrorMsg: "send payload",
+						Metadata: map[string]interface{}{
+							"payload-index": pi,
+							"ip":            ip,
+							"port":          port,
+						},
+					}
+					continue
+				}
+				go s.waitResponse(conn, ip, port, opts, &wgIPs, throttleConc)
+			}
+		}
+	}
+	wgIPs.Wait()
+}
+
+func sendRequest(
+	ip []byte,
+	port uint16,
+	payload string,
+) (net.Conn, error) {
+	conn, err := net.Dial("udp", fmt.Sprintf("%s:%d", ip, port))
+	if err != nil {
+		return nil, fmt.Errorf("connect: %w", err)
+	}
+	if _, err := conn.Write([]byte(payload)); err != nil {
+		return nil, fmt.Errorf("write: %w", err)
+	}
+	return conn, nil
+}
+
+func (s *Scanner) waitResponse(
+	conn net.Conn,
+	ip []byte,
+	port uint16,
+	opts *Options,
+	wg *sync.WaitGroup,
+	throttleConc chan struct{},
+) {
+	defer wg.Done()
+	if err := readResponse(conn, opts); err == nil {
+		writeAsync(s.scanData, fmt.Sprintf("%s:%d", ip, port), unsafe.S2B("open"), &s.scanDataLock)
+	} else {
+		status := readAsync(s.scanData, fmt.Sprintf("%s:%d", ip, port), &s.scanDataLock)
+		if bytes.Equal(status, []byte{}) {
+			writeAsync(s.scanData, fmt.Sprintf("%s:%d", ip, port), unsafe.S2B("unknown"), &s.scanDataLock)
+		}
+	}
+
+	<-throttleConc
+}
+
+func readResponse(conn net.Conn, opts *Options) error {
+	defer conn.Close()
+	buffer := make([]byte, 1024)
+	if err := conn.SetReadDeadline(
+		time.Now().Add(time.Duration(opts.timeout) * time.Second),
+	); err != nil {
+		return err
+	}
+	if _, err := conn.Read(buffer); err != nil {
+		return err
+	}
+	return nil
+}
+
+// SniffICMP listens for ICMP packets and writes the results to the scanData map.
+func (s *Scanner) SniffICMP(ctx context.Context, wg *sync.WaitGroup) error {
+	defer wg.Done()
+	conn, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
+	if err != nil {
+		return fmt.Errorf("open ICMP socket: %w", err)
+	}
+	defer conn.Close()
+
+	go func() {
+		<-ctx.Done()
+		if err := conn.Close(); err != nil {
+			panic(fmt.Errorf(
+				"close ICMP socket: %s",
+				err,
+			))
+		}
+	}()
+
+	for {
+		rb := make([]byte, MaxBufferSize)
+		n, peer, err := conn.ReadFrom(rb)
+
+		if err != nil {
+			if netOpError, ok := err.(*net.OpError); ok &&
+				netOpError.Err.Error() == "use of closed network connection" {
+				break
+			}
+			return fmt.Errorf("read from ICMP socket: %w", err)
+		}
+		rm, err := icmp.ParseMessage(iana.ProtocolICMP, rb[:n])
+		if err != nil {
+			return fmt.Errorf("parse ICMP response: %w", err)
+		}
+
+		port := uint16(s.currentPort)
+		if port == 0 {
+			continue
+		}
+		status := readAsync(s.scanData, fmt.Sprintf("%v:%d", peer.String(), port), &s.scanDataLock)
+		if rm.Type == ipv4.ICMPTypeDestinationUnreachable && rm.Code == DestinationUnreachable {
+			if !bytes.Equal(status, unsafe.S2B("open")) {
+				writeAsync(s.scanData, fmt.Sprintf("%v:%d", peer.String(), port), unsafe.S2B("closed"), &s.scanDataLock)
+			}
+		} else {
+			if bytes.Equal(status, []byte{}) || bytes.Equal(status, unsafe.S2B("unknown")) {
+				writeAsync(s.scanData, fmt.Sprintf("%v:%d", peer.String(), port), unsafe.S2B("filtered"), &s.scanDataLock)
+			}
+		}
+	}
+	return nil
 }
 
 // Segmentation splits a subnet into segments.
@@ -190,7 +408,7 @@ func BreakUPPort(portRange []byte) ([]uint16, error) {
 	return ports, nil
 }
 
-// Hosts returns all hosts in a CIDR.
+// Hosts generates all host IP addresses within a CIDR range.
 func Hosts(cidr []byte) ([][]byte, error) {
 	if !bytes.Contains(cidr, []byte{'/'}) {
 		return [][]byte{cidr}, nil
@@ -217,200 +435,14 @@ func inc(ip net.IP) {
 	}
 }
 
-// SendRequests sends UDP requests with a dedicated payloads to the specified targets.
-func (s *Scanner) SendRequests(
-	log *zerolog.Logger,
-	ip []byte,
-	ports []uint16,
-	payloads map[uint16][]string,
-	opts *Options,
-	wg *sync.WaitGroup,
-	throttle chan struct{},
-) {
-	defer wg.Done()
-	var plds []string
-	var wgPorts sync.WaitGroup
-
-	throttleLocal := make(chan struct{}, 1)
-
-	for _, port := range ports {
-		for i := uint8(0); i <= opts.recheck; i++ {
-			if val, ok := payloads[port]; ok {
-				plds = val
-			} else {
-				plds = []string{""}
-			}
-
-			for pi, pld := range plds {
-				wgPorts.Add(1)
-				throttle <- struct{}{}
-				if !opts.fast {
-					throttleLocal <- struct{}{}
-					writeAsync(s.currentPort, unsafe.B2S(ip), port, &s.currentPortLock)
-				}
-				conn, err := sendRequest(ip, port, pld)
-				if err != nil {
-					log.Error().Err(err).Int("payload-index", pi).Bytes("ip", ip).Uint16("port", port).Msg("send payload")
-					continue
-				}
-				go s.waitResponse(conn, ip, port, opts, &wgPorts, throttle, throttleLocal)
-			}
-		}
-	}
-	wgPorts.Wait()
+func writeAsync[K comparable, V any](data map[K]V, key K, value V, lock *sync.RWMutex) {
+	lock.Lock()
+	defer lock.Unlock()
+	data[key] = value
 }
 
-func sendRequest(
-	ip []byte,
-	port uint16,
-	payload string,
-) (net.Conn, error) {
-	conn, err := net.Dial("udp", fmt.Sprintf("%s:%d", ip, port))
-	if err != nil {
-		return nil, fmt.Errorf("connect: %w", err)
-	}
-	if _, err := conn.Write([]byte(payload)); err != nil {
-		return nil, fmt.Errorf("write: %w", err)
-	}
-	return conn, nil
-}
-
-func (s *Scanner) waitResponse(conn net.Conn,
-	ip []byte,
-	port uint16,
-	opts *Options,
-	wg *sync.WaitGroup,
-	throttle chan struct{},
-	throttleLocal chan struct{},
-) {
-	defer wg.Done()
-	if err := readResponse(conn, opts); err == nil {
-		writeAsync(s.scanData, fmt.Sprintf("%s:%d", ip, port), unsafe.S2B("open"), &s.scanDataLock)
-	} else {
-		status := readAsync(s.scanData, fmt.Sprintf("%s:%d", ip, port), &s.scanDataLock)
-		if bytes.Equal(status, []byte{}) {
-			writeAsync(s.scanData, fmt.Sprintf("%s:%d", ip, port), unsafe.S2B("unknown"), &s.scanDataLock)
-		}
-	}
-
-	<-throttle
-	if !opts.fast {
-		<-throttleLocal
-	}
-}
-
-func readResponse(conn net.Conn, opts *Options) error {
-	defer conn.Close()
-	buffer := make([]byte, 1024)
-	if err := conn.SetReadDeadline(
-		time.Now().Add(time.Duration(opts.timeout) * time.Second),
-	); err != nil {
-		return err
-	}
-	if _, err := conn.Read(buffer); err != nil {
-		return err
-	}
-	return nil
-}
-
-// SniffICMP listens for ICMP packets and writes the results to the scanData map.
-func (s *Scanner) SniffICMP(ctx context.Context, wg *sync.WaitGroup) error {
-	defer wg.Done()
-	conn, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
-	if err != nil {
-		return fmt.Errorf("open ICMP socket: %w", err)
-	}
-	defer conn.Close()
-
-	go func() {
-		<-ctx.Done()
-		if err := conn.Close(); err != nil {
-			panic(fmt.Errorf(
-				"close ICMP socket: %s",
-				err,
-			))
-		}
-	}()
-
-	for {
-		rb := make([]byte, 65565)
-		n, peer, err := conn.ReadFrom(rb)
-
-		if err != nil {
-			if netOpError, ok := err.(*net.OpError); ok &&
-				netOpError.Err.Error() == "use of closed network connection" {
-				break
-			}
-			return fmt.Errorf("read from ICMP socket: %w", err)
-		}
-		rm, err := icmp.ParseMessage(iana.ProtocolICMP, rb[:n])
-		if err != nil {
-			return fmt.Errorf("parse ICMP response: %w", err)
-		}
-
-		port := readAsync(s.currentPort, peer.String(), &s.currentPortLock)
-		if port == 0 {
-			continue
-		}
-		status := readAsync(s.scanData, fmt.Sprintf("%v:%d", peer.String(), port), &s.scanDataLock)
-		if rm.Type == ipv4.ICMPTypeDestinationUnreachable && rm.Code == 3 {
-			if !bytes.Equal(status, unsafe.S2B("open")) {
-				writeAsync(s.scanData, fmt.Sprintf("%v:%d", peer.String(), port), unsafe.S2B("closed"), &s.scanDataLock)
-			}
-		} else {
-			if bytes.Equal(status, []byte{}) || bytes.Equal(status, unsafe.S2B("unknown")) {
-				writeAsync(s.scanData, fmt.Sprintf("%v:%d", peer.String(), port), unsafe.S2B("filtered"), &s.scanDataLock)
-			}
-		}
-	}
-	return nil
-}
-
-// Scan scans the hosts and ports and returns the results.
-func (s *Scanner) Scan(log *zerolog.Logger) (map[string][]byte, error) {
-	throttle := make(chan struct{}, s.opts.maxConcurrency)
-	subnets := [][]byte{}
-
-	for _, host := range s.hosts {
-		r, err := ParseSubnet(unsafe.S2B(host))
-		if err != nil {
-			return nil, fmt.Errorf("parse subnet: %w", err)
-		}
-		subnets = append(subnets, r...)
-	}
-
-	ports := []uint16{}
-
-	for _, port := range s.ports {
-		r, err := BreakUPPort(unsafe.S2B(port))
-		if err != nil {
-			return nil, fmt.Errorf("break up port: %w", err)
-		}
-		ports = append(ports, r...)
-	}
-	rand.Seed(time.Now().UnixNano())
-
-	var wgSubnets sync.WaitGroup
-	wgSubnets.Add(len(subnets))
-	for _, subnet := range subnets {
-		go func(subnet []byte, wgSubnets *sync.WaitGroup) {
-			defer wgSubnets.Done()
-			ips, err := Hosts(subnet)
-			if err != nil {
-				log.Error().Err(err).Msg("generate IP")
-				return
-			}
-
-			var wgIPs sync.WaitGroup
-			wgIPs.Add(len(ips))
-			for _, ip := range ips {
-				rand.Shuffle(len(ports), func(i, j int) { ports[i], ports[j] = ports[j], ports[i] })
-				go s.SendRequests(log, ip, ports, s.payloads, s.opts, &wgIPs, throttle)
-			}
-			wgIPs.Wait()
-		}(subnet, &wgSubnets)
-	}
-	wgSubnets.Wait()
-
-	return s.scanData, nil
+func readAsync[K comparable, V any](data map[K]V, key K, lock *sync.RWMutex) V {
+	lock.RLock()
+	defer lock.RUnlock()
+	return data[key]
 }
