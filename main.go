@@ -42,7 +42,7 @@ var (
 	).Default("2").Short('t').Envar("GOUDPSCAN_TIMEOUT").Uint()
 	recheck = cli.Flag(
 		"recheck",
-		"Recheck. How many times to check every port.",
+		"Recheck. How many times to check every port (max 255).",
 	).Default("0").Short('r').Envar("GOUDPSCAN_RECHECK").Uint8()
 	maxConcurrency = cli.Flag(
 		"max-concurrency",
