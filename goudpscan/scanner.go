@@ -156,7 +156,7 @@ func (s *Scanner) SendRequests(
 						CustomErrorMsg: "send payload",
 						Metadata: map[string]interface{}{
 							"payload-index": pi,
-							"ip":            ip,
+							"ip":            unsafe.B2S(ip),
 							"port":          port,
 						},
 					}
