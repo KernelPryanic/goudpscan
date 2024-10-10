@@ -3,13 +3,12 @@ package tooling
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"strings"
-
 	"github.com/KernelPryanic/goudpscan/goudpscan"
 	"github.com/KernelPryanic/goudpscan/unsafe"
 	"github.com/mcuadros/go-version"
 	"github.com/rs/zerolog"
+	"strconv"
+	"strings"
 )
 
 func FormPayload(log *zerolog.Logger, payloadData map[string][]string) (map[uint16][]string, error) {
@@ -20,16 +19,18 @@ func FormPayload(log *zerolog.Logger, payloadData map[string][]string) (map[uint
 		if err != nil {
 			return nil, fmt.Errorf("break up port: %w", err)
 		}
-		for _, p := range ports {
-			for i, data := range v {
-				d := fmt.Sprintf("`%s`", strings.ReplaceAll(data, " ", ""))
-				s, err := strconv.Unquote(d)
-				if err != nil {
-					log.Error().Err(err).Uint16("port", p).Int("payload-index", i).Str("payload", d).Msg("parse payload")
-					continue
-				}
-				payload[p] = append(payload[p], s)
+		var tmp []string
+		for i, data := range v {
+			d := fmt.Sprintf("\"%s\"", strings.ReplaceAll(data, "\n", ""))
+			s, err := strconv.Unquote(d)
+			if err != nil {
+				log.Error().Err(err).Str("port", k).Int("payload-index", i).Str("payload", d).Msg("parse payload")
+				continue
 			}
+			tmp = append(tmp, s)
+		}
+		for _, p := range ports {
+			payload[p] = tmp
 		}
 	}
 
