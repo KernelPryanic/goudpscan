@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    tags:
+      - '*.*.*'
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lints:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.23.6
+          check-latest: true
+      - uses: golangci/golangci-lint-action@v6
+        env:
+          # Go includes VCS data since v1.20 and this
+          # can cause problems with CI checkout.
+          # This information shouldn't be necessary for CI anyway.
+          GOFLAGS: "-buildvcs=false"
+        with:
+          version: v1.62.2
+          # --concurrency 0 automatically matches Linux container CPU quota.
+          args: --timeout 10m --concurrency 0
+
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.23.6
+          check-latest: true
+      - name: Run tests and calculate coverage
+        run: go test -v -covermode=count -coverprofile=coverage.out
+
+  static-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.23.6
+          check-latest: true
+      - id: govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: 1.23.6

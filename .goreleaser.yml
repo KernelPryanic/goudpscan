@@ -31,7 +31,11 @@ snapshot:
 release:
   draft: false
   replace_existing_draft: true
-  prerelease: true
+  prerelease: false
   mode: append
+  header: |
+    ## Release {{ .Tag }} ({{ .Date }})
+    
+    See [CHANGELOG.md](CHANGELOG.md) for details.
 changelog:
   skip: true
