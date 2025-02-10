@@ -12,7 +12,8 @@ import (
 	"time"
 
 	"github.com/KernelPryanic/goudpscan/internal/iana"
-	"github.com/KernelPryanic/goudpscan/unsafe"
+	"github.com/KernelPryanic/goudpscan/internal/unsafe"
+	"github.com/KernelPryanic/goudpscan/pkg/ctxerr"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
@@ -24,17 +25,6 @@ const (
 	EchoReply              = 0
 	DestinationUnreachable = 3
 )
-
-// ScannerError is a custom error structure to handle goroutine errors.
-type ScannerError struct {
-	OrigError      error
-	CustomErrorMsg string
-	Metadata       map[string]interface{}
-}
-
-func (se ScannerError) Error() string {
-	return se.OrigError.Error()
-}
 
 // Scanner is a UDP scanner.
 type Scanner struct {
@@ -69,7 +59,7 @@ func New(
 
 // Scan scans the hosts and ports and returns the results.
 func (s *Scanner) Scan(
-	errors chan<- ScannerError, seed int64,
+	errorsCh chan<- error, seed int64,
 ) map[string][]byte {
 	wgAll := sync.WaitGroup{}
 	throttleConc := make(chan struct{}, s.opts.maxConcurrency)
@@ -79,10 +69,7 @@ func (s *Scanner) Scan(
 	for _, host := range s.hosts {
 		r, err := ParseSubnet(unsafe.S2B(host))
 		if err != nil {
-			errors <- ScannerError{
-				OrigError:      err,
-				CustomErrorMsg: "parse subnet",
-			}
+			errorsCh <- fmt.Errorf("parsing subnet: %w", err)
 			return nil
 		}
 		subnets = append(subnets, r...)
@@ -91,10 +78,7 @@ func (s *Scanner) Scan(
 	for _, port := range s.ports {
 		ports, err := BreakUPPort(unsafe.S2B(port))
 		if err != nil {
-			errors <- ScannerError{
-				OrigError:      err,
-				CustomErrorMsg: "break up port",
-			}
+			errorsCh <- fmt.Errorf("breaking up port: %w", err)
 			return nil
 		}
 		r.Shuffle(len(ports), func(i, j int) { ports[i], ports[j] = ports[j], ports[i] })
@@ -106,12 +90,12 @@ func (s *Scanner) Scan(
 			for _, subnet := range subnets {
 				ips, err := Hosts(subnet)
 				if err != nil {
-					log.Error().Err(err).Msg("generate IP")
+					log.Error().Err(err).Msg("generating IP")
 				}
 
 				wgAll.Add(1)
 				r.Shuffle(len(ips), func(i, j int) { ips[i], ips[j] = ips[j], ips[i] })
-				go s.SendRequests(errors, &wgAll, s.opts, throttleConc, ips, p, s.payloads)
+				go s.SendRequests(errorsCh, &wgAll, s.opts, throttleConc, ips, p, s.payloads)
 			}
 
 			if !s.opts.fast {
@@ -126,7 +110,7 @@ func (s *Scanner) Scan(
 
 // SendRequests sends UDP requests with a dedicated payloads to the specified targets.
 func (s *Scanner) SendRequests(
-	errors chan<- ScannerError,
+	errorsCh chan<- error,
 	wgAll *sync.WaitGroup,
 	opts *Options,
 	throttleConc chan struct{},
@@ -151,15 +135,13 @@ func (s *Scanner) SendRequests(
 				throttleConc <- struct{}{}
 				conn, err := sendRequest(ip, port, pld)
 				if err != nil {
-					errors <- ScannerError{
-						OrigError:      err,
-						CustomErrorMsg: "send payload",
-						Metadata: map[string]interface{}{
+					errorsCh <- ctxerr.With(fmt.Errorf("sending request: %w", err),
+						map[string]interface{}{
 							"payload-index": pi,
 							"ip":            unsafe.B2S(ip),
 							"port":          port,
 						},
-					}
+					)
 					continue
 				}
 				go s.waitResponse(conn, ip, port, opts, &wgIPs, throttleConc)
@@ -176,10 +158,10 @@ func sendRequest(
 ) (net.Conn, error) {
 	conn, err := net.Dial("udp", fmt.Sprintf("%s:%d", ip, port))
 	if err != nil {
-		return nil, fmt.Errorf("connect: %w", err)
+		return nil, fmt.Errorf("connecting: %w", err)
 	}
 	if _, err := conn.Write([]byte(payload)); err != nil {
-		return nil, fmt.Errorf("write: %w", err)
+		return nil, fmt.Errorf("writing: %w", err)
 	}
 	return conn, nil
 }
@@ -224,7 +206,7 @@ func (s *Scanner) SniffICMP(ctx context.Context, wg *sync.WaitGroup) error {
 	defer wg.Done()
 	conn, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
 	if err != nil {
-		return fmt.Errorf("open ICMP socket: %w", err)
+		return fmt.Errorf("opening ICMP socket: %w", err)
 	}
 	defer conn.Close()
 
@@ -232,7 +214,7 @@ func (s *Scanner) SniffICMP(ctx context.Context, wg *sync.WaitGroup) error {
 		<-ctx.Done()
 		if err := conn.Close(); err != nil {
 			panic(fmt.Errorf(
-				"close ICMP socket: %s",
+				"closing ICMP socket: %s",
 				err,
 			))
 		}
@@ -247,11 +229,11 @@ func (s *Scanner) SniffICMP(ctx context.Context, wg *sync.WaitGroup) error {
 				netOpError.Err.Error() == "use of closed network connection" {
 				break
 			}
-			return fmt.Errorf("read from ICMP socket: %w", err)
+			return fmt.Errorf("reading from ICMP socket: %w", err)
 		}
 		rm, err := icmp.ParseMessage(iana.ProtocolICMP, rb[:n])
 		if err != nil {
-			return fmt.Errorf("parse ICMP response: %w", err)
+			return fmt.Errorf("parsing ICMP response: %w", err)
 		}
 
 		port := uint16(s.currentPort)
@@ -313,11 +295,11 @@ func BreakUpIP(segments [][]byte) ([][]byte, error) {
 
 		start, err := strconv.Atoi(unsafe.B2S(_start))
 		if err != nil {
-			return nil, fmt.Errorf("parse start segment: %w", err)
+			return nil, fmt.Errorf("parsing start segment: %w", err)
 		}
 		end, err := strconv.Atoi(unsafe.B2S(_end))
 		if err != nil {
-			return nil, fmt.Errorf("parse end segment: %w", err)
+			return nil, fmt.Errorf("parsing end segment: %w", err)
 		}
 
 		for i := start; i <= end; i++ {
@@ -327,7 +309,7 @@ func BreakUpIP(segments [][]byte) ([][]byte, error) {
 				),
 			)
 			if err != nil {
-				return nil, fmt.Errorf("break up generated IP: %w", err)
+				return nil, fmt.Errorf("breaking up generated IP: %w", err)
 			}
 			tails = append(tails, r...)
 		}
@@ -352,7 +334,7 @@ func ParseSubnet(subnet []byte) ([][]byte, error) {
 	if bytes.Contains(subnet, []byte{'/'}) {
 		subnets, err := BreakUpIP(segments[:len(segments)-1])
 		if err != nil {
-			return nil, fmt.Errorf("break up IP: %w", err)
+			return nil, fmt.Errorf("breaking up IP: %w", err)
 		}
 		for i := 0; i < len(subnets); i++ {
 			subnets[i] = append(subnets[i], '/')
@@ -363,7 +345,7 @@ func ParseSubnet(subnet []byte) ([][]byte, error) {
 
 	subnets, err := BreakUpIP(segments)
 	if err != nil {
-		return nil, fmt.Errorf("break up IP: %w", err)
+		return nil, fmt.Errorf("breaking up IP: %w", err)
 	}
 
 	return subnets, nil
@@ -382,13 +364,13 @@ func BreakUPPort(portRange []byte) ([]uint16, error) {
 
 			start64, err := strconv.ParseUint(unsafe.B2S(_start), 10, 16)
 			if err != nil {
-				return nil, fmt.Errorf("parse start port: %w", err)
+				return nil, fmt.Errorf("parsing start port: %w", err)
 			}
 			start := uint16(start64)
 
 			end64, err := strconv.ParseUint(unsafe.B2S(_end), 10, 16)
 			if err != nil {
-				return nil, fmt.Errorf("parse end port: %w", err)
+				return nil, fmt.Errorf("parsing end port: %w", err)
 			}
 			end := uint16(end64)
 
@@ -398,7 +380,7 @@ func BreakUPPort(portRange []byte) ([]uint16, error) {
 		} else {
 			port64, err := strconv.ParseUint(unsafe.B2S(s), 10, 16)
 			if err != nil {
-				return nil, fmt.Errorf("parse port: %w", err)
+				return nil, fmt.Errorf("parsing port: %w", err)
 			}
 			port := uint16(port64)
 			ports = append(ports, port)
