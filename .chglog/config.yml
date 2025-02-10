@@ -6,11 +6,10 @@ info:
 options:
   sort: "date"
   header:
-    pattern: "^(\\w*)((\\([^:]+\\)))(?:!)?\\:[ \\t]*([^\\n]*)$"
+    pattern: "^(\\w+)(?:\\(([^)]+)\\))?(?:!)?\\:[ \\t]*(.*)$"
     pattern_maps:
       - Type
       - Scope
-      - Skip
       - Subject
   notes:
     keywords:
