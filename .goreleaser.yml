@@ -38,4 +38,4 @@ release:
     
     See [CHANGELOG.md](CHANGELOG.md) for details.
 changelog:
-  skip: true
+  disable: true
