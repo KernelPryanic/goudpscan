@@ -80,16 +80,18 @@ func formPayload(logger zerolog.Logger, payloadData map[string][]string) (map[ui
 		if err != nil {
 			return nil, fmt.Errorf("breaking up port: %w", err)
 		}
-		for _, p := range ports {
-			for i, data := range v {
-				d := fmt.Sprintf("`%s`", strings.ReplaceAll(data, " ", ""))
-				s, err := strconv.Unquote(d)
-				if err != nil {
-					logger.Error().Err(err).Uint16("port", p).Int("payload-index", i).Str("payload", d).Msg("parse payload")
-					continue
-				}
-				payload[p] = append(payload[p], s)
+		var tmp []string
+		for i, data := range v {
+			d := fmt.Sprintf("\"%s\"", strings.ReplaceAll(data, "\n", ""))
+			s, err := strconv.Unquote(d)
+			if err != nil {
+				logger.Error().Err(err).Str("ports", k).Int("payload-index", i).Str("payload", d).Msg("parse payload")
+				continue
 			}
+			tmp = append(tmp, s)
+		}
+		for _, p := range ports {
+			payload[p] = tmp
 		}
 	}
 
