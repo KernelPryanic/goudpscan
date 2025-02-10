@@ -2,26 +2,26 @@ style: github
 template: CHANGELOG.tpl.md
 info:
   title: CHANGELOG
-  repository_url: https://github.com/KernelPryanic/goudpscan
+  repository_url: https://github.com/jwplayer/ssai-go
 options:
-  commits:
-    # filters:
-    #   Type:
-    #     - feat
-    #     - fix
-    #     - perf
-    #     - refactor
-  commit_groups:
-    # title_maps:
-    #   feat: Features
-    #   fix: Bug Fixes
-    #   perf: Performance Improvements
-    #   refactor: Code Refactoring
+  sort: "date"
   header:
-    pattern: "^((\\w+)\\s.*)$"
+    pattern: "^(\\w*)((\\([^:]+\\)))(?:!)?\\:[ \\t]*([^\\n]*)$"
     pattern_maps:
-      - Subject
       - Type
+      - Scope
+      - Skip
+      - Subject
   notes:
     keywords:
-      - BREAKING CHANGE
+      - BREAKING CHANGES
+  commit_groups:
+    title_maps:
+      feat: Features
+      fix: Bug Fixes
+      perf: Performance Improvements
+      refactor: Code Refactoring
+      chore: Chores
+      ci: CI/CD
+      docs: Documentation Updates
+      test: Test Updates

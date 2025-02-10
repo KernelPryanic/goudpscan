@@ -1,4 +1,4 @@
-package goudpscan
+package main
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KernelPryanic/goudpscan/unsafe"
+	"github.com/KernelPryanic/goudpscan/internal/unsafe"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16,7 +16,7 @@ import (
 func TestNewOptions(t *testing.T) {
 	options := NewOptions(true, uint(10), uint8(3), 2)
 
-	assert.NotNil(t, options, "NewOptions should not return nil")
+	assert.NotNil(t, options)
 }
 
 func TestNewScanner(t *testing.T) {
@@ -27,7 +27,7 @@ func TestNewScanner(t *testing.T) {
 		map[uint16][]string{},
 	)
 
-	assert.NotNil(t, scanner, "New should not return nil")
+	assert.NotNil(t, scanner)
 }
 
 func TestSegmentation(t *testing.T) {
@@ -189,22 +189,22 @@ func TestScan(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		if err := sc.SniffICMP(ctx, &wg); err != nil && !errors.Is(err, net.ErrClosed) {
-			t.Errorf("SniffICMP failed: %v", err)
+			t.Errorf("ICMP sniffing failed: %v", err)
 		}
 	}()
 
 	time.Sleep(250 * time.Millisecond)
 
-	errors := make(chan ScannerError, 8)
+	errorsCh := make(chan error, 8)
 	ctx, cancelErrHandler := context.WithCancel(context.Background())
-	go HelperErrorHandler(t, ctx, errors)
+	go HelperErrorHandler(t, ctx, errorsCh)
 	// Run the Scan function
-	scanResult := sc.Scan(errors, time.Now().UnixNano())
+	scanResult := sc.Scan(errorsCh, time.Now().UnixNano())
 
 	// Check the result of the scan
 	expectedKey := "127.0.0.1:80"
 	if _, ok := scanResult[expectedKey]; !ok {
-		t.Errorf("Scan result does not contain the expected key: %s", expectedKey)
+		t.Errorf("scan result does not contain the expected key: %s", expectedKey)
 	}
 	require.Len(t, scanResult, 1)
 
@@ -214,11 +214,11 @@ func TestScan(t *testing.T) {
 	wg.Wait()
 }
 
-func HelperErrorHandler(t *testing.T, ctx context.Context, errors <-chan ScannerError) {
+func HelperErrorHandler(t *testing.T, ctx context.Context, errorsCh <-chan error) {
 	for {
 		select {
-		case err := <-errors:
-			t.Errorf("Scan failed: %v", err)
+		case err := <-errorsCh:
+			t.Errorf("scan failed: %v", err)
 		case <-ctx.Done():
 			return
 		}

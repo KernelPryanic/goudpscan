@@ -2,124 +2,157 @@ package main
 
 import (
 	"context"
-	"embed"
 	"fmt"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/KernelPryanic/goudpscan/goudpscan"
-	"github.com/KernelPryanic/goudpscan/tooling"
+	"github.com/KernelPryanic/goudpscan/internal/unsafe"
+	"github.com/KernelPryanic/goudpscan/pkg/ctxerr"
+	"github.com/KernelPryanic/goudpscan/pkg/log"
+	"github.com/mcuadros/go-version"
 	"github.com/rs/zerolog"
 	"gopkg.in/alecthomas/kingpin.v2"
 	"gopkg.in/yaml.v3"
+
+	_ "embed"
 )
 
 var (
-	cli      = kingpin.New("goudpscan", "A pretty fast UDP scanner.")
-	logLevel = cli.Flag(
+	cli         = kingpin.New("goudpscan", "A pretty fast UDP scanner.")
+	optLogLevel = cli.Flag(
 		"log-level",
-		"Set the log level",
+		"Set the log level.",
 	).Default("info").Envar("GOUDPSCAN_LOG_LEVEL").String()
-	logJson = cli.Flag(
+	optLogJSON = cli.Flag(
 		"log-json",
 		"Output logs in JSON format.",
 	).Default("false").Envar("GOUDPSCAN_JSON_LOG").Bool()
-	print = cli.Flag(
+	optPrint = cli.Flag(
 		"print",
 		"Print payloads.",
 	).Default("false").Envar("GOUDPSCAN_PRINT").Bool()
-	payloads = cli.Flag(
+	optPayloads = cli.Flag(
 		"payloads",
 		"Paylaods yml config file.",
 	).Short('l').Envar("GOUDPSCAN_PAYLOADS").String()
-	fast = cli.Flag(
+	optFast = cli.Flag(
 		"fast",
 		"Fast scan mode. Only \"Open\" or \"Unknown\" statuses.",
 	).Default("false").Short('f').Envar("GOUDPSCAN_FAST").Bool()
-	timeout = cli.Flag(
+	optTimeout = cli.Flag(
 		"timeout",
 		"Timeout. Time to wait for response in seconds.",
 	).Default("2").Short('t').Envar("GOUDPSCAN_TIMEOUT").Uint()
-	recheck = cli.Flag(
+	optRecheck = cli.Flag(
 		"recheck",
 		"Recheck. How many times to check every port (max 255).",
 	).Default("0").Short('r').Envar("GOUDPSCAN_RECHECK").Uint8()
-	maxConcurrency = cli.Flag(
+	optMaxConcurrency = cli.Flag(
 		"max-concurrency",
 		"Maximum concurrency. Number of concurrent requests.",
 	).Default("768").Short('c').Envar("GOUDPSCAN_MAX_CONCURRENCY").Int()
-	sort = cli.Flag(
+	optSort = cli.Flag(
 		"sort",
 		"Sort results.",
 	).Default("false").Short('s').Envar("GOUDPSCAN_SORT").Bool()
-	ports = cli.Flag(
+	optPorts = cli.Flag(
 		"ports",
 		"Ports to scan. Separated by commas and/or range: 80,443-1024",
 	).Default("7-1024").Short('p').Envar("GOUDPSCAN_PORTS").Strings()
-	hosts = cli.Arg(
+	optHosts = cli.Arg(
 		"hosts",
 		"Hosts to scan. Separated by spaces and/or range and/or CIDR: 127.1.0.1 127.0.0-32.0/24",
 	).Default("127.0.0.1").Envar("GOUDPSCAN_HOSTS").Strings()
 )
 
 //go:embed payloads.yml
-var payloadsFS embed.FS
+var payloads []byte
+
+func formPayload(logger zerolog.Logger, payloadData map[string][]string) (map[uint16][]string, error) {
+	payload := map[uint16][]string{}
+
+	for k, v := range payloadData {
+		ports, err := BreakUPPort(unsafe.S2B(k))
+		if err != nil {
+			return nil, fmt.Errorf("breaking up port: %w", err)
+		}
+		var tmp []string
+		for i, data := range v {
+			d := fmt.Sprintf("\"%s\"", strings.ReplaceAll(data, "\n", ""))
+			s, err := strconv.Unquote(d)
+			if err != nil {
+				logger.Error().Err(err).Str("ports", k).Int("payload-index", i).Str("payload", d).Msg("parse payload")
+				continue
+			}
+			tmp = append(tmp, s)
+		}
+		for _, p := range ports {
+			payload[p] = tmp
+		}
+	}
+
+	return payload, nil
+}
+
+func errorHandler(logger zerolog.Logger, ctx context.Context, errorsCh <-chan error) {
+	for {
+		select {
+		case err := <-errorsCh:
+			logger.Error().Ctx(ctxerr.Ctx(ctx, err)).Msg("error")
+		case <-ctx.Done():
+			return
+		}
+	}
+}
 
 func main() {
 	if _, err := cli.Parse(os.Args[1:]); err != nil {
 		panic(err)
 	}
-	opts := goudpscan.NewOptions(*fast, *timeout, *recheck, *maxConcurrency)
-	log := initLogger()
+	opts := NewOptions(*optFast, *optTimeout, *optRecheck, *optMaxConcurrency)
+	logger := log.New(!*optLogJSON, os.Stdout)
+	log.SetLogLevel(*optLogLevel)
 
-	var payloadFile []byte
-	var err error
-	if *payloads == "" {
-		payloadFile, err = payloadsFS.ReadFile("payloads.yml")
-	} else {
-		payloadFile, err = os.ReadFile(*payloads)
-	}
-	if err != nil {
-		log.Panic().Err(err).Msg("read file with payloads")
-	}
-	if *print {
-		fmt.Println(string(payloadFile))
+	if *optPrint {
+		fmt.Println(string(payloads))
 		return
 	}
 
 	payloadData := make(map[string][]string)
-	if err = yaml.Unmarshal(payloadFile, &payloadData); err != nil {
-		log.Error().Err(err).Msg("unmarshal payloads")
+	if err := yaml.Unmarshal(payloads, &payloadData); err != nil {
+		logger.Error().Err(err).Msg("unmarshal payloads")
 		return
 	}
-	pl, err := tooling.FormPayload(log, payloadData)
+	pl, err := formPayload(logger, payloadData)
 	if err != nil {
-		log.Error().Err(err).Msg("form payload")
+		logger.Error().Err(err).Msg("form payload")
 		return
 	}
-	sc := goudpscan.New(opts, *hosts, *ports, pl)
+	sc := New(opts, *optHosts, *optPorts, pl)
 
 	ctx, cancelSniffer := context.WithCancel(context.Background())
 	var snifferWG sync.WaitGroup
-	if !*fast {
+	if !*optFast {
 		snifferWG.Add(1)
 		go func() {
 			if err := sc.SniffICMP(ctx, &snifferWG); err != nil {
-				log.Error().Err(err).Msg("sniff ICMP")
+				logger.Error().Err(err).Msg("sniff ICMP")
 			}
 		}()
 	}
 
 	time.Sleep(250 * time.Millisecond)
 
-	errors := make(chan goudpscan.ScannerError, 8)
+	errorsCh := make(chan error, 8)
 	ctx, cancelErrHandler := context.WithCancel(context.Background())
-	go tooling.ErrorHandler(log, ctx, errors)
+	go errorHandler(logger, ctx, errorsCh)
 
 	start := time.Now()
-	result := sc.Scan(errors, start.UnixNano())
+	result := sc.Scan(errorsCh, start.UnixNano())
 
 	// Stop the sniffer
 	cancelSniffer()
@@ -132,48 +165,20 @@ func main() {
 		keys[i] = k
 		i++
 	}
-	if *sort {
-		resultChan := make(chan []string, 1)
-		tooling.MergeSortAsync(keys, resultChan)
-		keys = <-resultChan
+	if *optSort {
+		sort.Slice(keys, func(i, j int) bool {
+			if version.CompareSimple(keys[i], keys[j]) == 1 {
+				return false
+			}
+			return true
+		})
 	}
 	elapsed := time.Since(start)
 	for _, k := range keys {
 		hp := strings.Split(k, ":")
-		log.Info().Str("host", hp[0]).Str("port", hp[1]).
+		logger.Info().Str("host", hp[0]).Str("port", hp[1]).
 			Bytes("status", result[k]).Msg("")
 	}
-	log.Info().Int("entities-scanned", len(result)).Msg("")
-	log.Info().Dur("elapsed-time", elapsed).Msg("")
-}
-
-func initLogger() *zerolog.Logger {
-	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
-
-	var log zerolog.Logger
-	if *logJson {
-		log = zerolog.New(os.Stdout).With().Timestamp().Logger()
-	} else {
-		output := zerolog.ConsoleWriter{Out: os.Stdout, PartsExclude: []string{"time"}}
-		log = zerolog.New(output).With().Logger()
-	}
-
-	switch *logLevel {
-	case "debug":
-		log = log.Level(zerolog.DebugLevel)
-	case "info":
-		log = log.Level(zerolog.InfoLevel)
-	case "warn":
-		log = log.Level(zerolog.WarnLevel)
-	case "error":
-		log = log.Level(zerolog.ErrorLevel)
-	case "fatal":
-		log = log.Level(zerolog.FatalLevel)
-	case "panic":
-		log = log.Level(zerolog.PanicLevel)
-	default:
-		log = log.Level(zerolog.InfoLevel)
-	}
-
-	return &log
+	logger.Info().Int("entities-scanned", len(result)).Msg("")
+	logger.Info().Dur("elapsed-time", elapsed).Msg("")
 }

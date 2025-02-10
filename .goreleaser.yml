@@ -17,7 +17,7 @@ builds:
       - arm
       - arm64
 archives:
-  - id: ggproxy
+  - id: goudpscan
     name_template: >-
       {{ .ProjectName }}-
       {{- .Version }}-
