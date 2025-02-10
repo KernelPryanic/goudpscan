@@ -37,7 +37,7 @@ var (
 	).Default("false").Envar("GOUDPSCAN_PRINT").Bool()
 	optPayloads = cli.Flag(
 		"payloads",
-		"Paylaods yml config file.",
+		"Payloads YAML file.",
 	).Short('l').Envar("GOUDPSCAN_PAYLOADS").String()
 	optFast = cli.Flag(
 		"fast",
@@ -117,6 +117,15 @@ func main() {
 	logger := log.New(!*optLogJSON, os.Stdout)
 	log.SetLogLevel(*optLogLevel)
 
+	if *optPayloads != "" {
+		var err error
+		payloads, err = os.ReadFile(*optPayloads)
+		if err != nil {
+			logger.Error().Err(err).Msg("reading payloads file")
+			return
+		}
+	}
+
 	if *optPrint {
 		fmt.Println(string(payloads))
 		return
@@ -124,12 +133,12 @@ func main() {
 
 	payloadData := make(map[string][]string)
 	if err := yaml.Unmarshal(payloads, &payloadData); err != nil {
-		logger.Error().Err(err).Msg("unmarshal payloads")
+		logger.Error().Err(err).Msg("unmarshalling payloads")
 		return
 	}
 	pl, err := formPayload(logger, payloadData)
 	if err != nil {
-		logger.Error().Err(err).Msg("form payload")
+		logger.Error().Err(err).Msg("forming payload")
 		return
 	}
 	sc := New(opts, *optHosts, *optPorts, pl)
@@ -140,7 +149,7 @@ func main() {
 		snifferWG.Add(1)
 		go func() {
 			if err := sc.SniffICMP(ctx, &snifferWG); err != nil {
-				logger.Error().Err(err).Msg("sniff ICMP")
+				logger.Error().Err(err).Msg("sniffing ICMP")
 			}
 		}()
 	}
@@ -167,10 +176,7 @@ func main() {
 	}
 	if *optSort {
 		sort.Slice(keys, func(i, j int) bool {
-			if version.CompareSimple(keys[i], keys[j]) == 1 {
-				return false
-			}
-			return true
+			return version.CompareSimple(keys[i], keys[j]) != 1
 		})
 	}
 	elapsed := time.Since(start)

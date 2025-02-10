@@ -1,0 +1,27 @@
+name: Go tests nightly with race detection.
+
+on:
+  schedule:
+    # Runs nightly at 05:00 UTC
+    - cron: '0 5 * * *'
+
+env:
+  # -race requires cgo
+  CGO_ENABLED: 1
+
+jobs:
+  tests-race:
+    runs-on:
+      - ubuntu-latest
+    steps:
+      - name: Install GCC
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.23.6
+      - name: Run go tests
+        run: go test -race -v ./...

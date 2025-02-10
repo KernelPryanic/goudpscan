@@ -1,0 +1,57 @@
+name: CD
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (format: x.y.z)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install git-chglog
+        run: |
+          CHGLOG_VERSION="0.15.4"
+          wget -O /tmp/git-chglog.tar.gz https://github.com/git-chglog/git-chglog/releases/download/v${CHGLOG_VERSION}/git-chglog_${CHGLOG_VERSION}_linux_amd64.tar.gz
+          cd /tmp && tar xzf git-chglog.tar.gz
+          sudo mv git-chglog /usr/local/bin/
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.6'
+
+      - name: Validate version format
+        run: |
+          if ! echo "${{ github.event.inputs.version }}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Invalid version format. Must be x.y.z"
+            exit 1
+          fi
+
+      - name: Generate changelog
+        run: |
+          git-chglog --output CHANGELOG.md "v${{ github.event.inputs.version }}"
+
+      - name: Create tag
+        run: |
+          git tag "v${{ github.event.inputs.version }}"
+          git push origin "v${{ github.event.inputs.version }}"
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v5
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
