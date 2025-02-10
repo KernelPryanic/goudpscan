@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/KernelPryanic/goudpscan"
 	"github.com/KernelPryanic/goudpscan/internal/unsafe"
 	"github.com/KernelPryanic/goudpscan/pkg/ctxerr"
 	"github.com/KernelPryanic/goudpscan/pkg/log"
@@ -77,7 +76,7 @@ func formPayload(logger zerolog.Logger, payloadData map[string][]string) (map[ui
 	payload := map[uint16][]string{}
 
 	for k, v := range payloadData {
-		ports, err := goudpscan.BreakUPPort(unsafe.S2B(k))
+		ports, err := BreakUPPort(unsafe.S2B(k))
 		if err != nil {
 			return nil, fmt.Errorf("breaking up port: %w", err)
 		}
@@ -112,7 +111,7 @@ func main() {
 	if _, err := cli.Parse(os.Args[1:]); err != nil {
 		panic(err)
 	}
-	opts := goudpscan.NewOptions(*optFast, *optTimeout, *optRecheck, *optMaxConcurrency)
+	opts := NewOptions(*optFast, *optTimeout, *optRecheck, *optMaxConcurrency)
 	logger := log.New(!*optLogJSON, os.Stdout)
 	log.SetLogLevel(*optLogLevel)
 
@@ -131,7 +130,7 @@ func main() {
 		logger.Error().Err(err).Msg("form payload")
 		return
 	}
-	sc := goudpscan.New(opts, *optHosts, *optPorts, pl)
+	sc := New(opts, *optHosts, *optPorts, pl)
 
 	ctx, cancelSniffer := context.WithCancel(context.Background())
 	var snifferWG sync.WaitGroup

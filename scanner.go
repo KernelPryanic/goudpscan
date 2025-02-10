@@ -1,4 +1,4 @@
-package goudpscan
+package main
 
 import (
 	"bytes"
